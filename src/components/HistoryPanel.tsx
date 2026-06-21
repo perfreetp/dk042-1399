@@ -15,7 +15,8 @@ import {
   List,
   Avatar,
   Statistic,
-  Typography
+  Typography,
+  App
 } from 'antd'
 import {
   SearchOutlined,
@@ -26,10 +27,12 @@ import {
   EditOutlined,
   EyeOutlined,
   ArrowLeftOutlined,
-  WarningOutlined
+  WarningOutlined,
+  SendOutlined,
+  ReloadOutlined
 } from '@ant-design/icons'
 import { useReviewStore, useHistoryTasks, useCurrentTask } from '../store/reviewStore'
-import type { ReviewTask, ExamType, ReviewStatus, AISuggestion } from '../types'
+import type { ReviewTask, ExamType, ReviewStatus, AISuggestion, ModificationTrace } from '../types'
 import { useState } from 'react'
 
 const { Search } = Input
@@ -59,9 +62,27 @@ const suggestionTypeLabels: Record<AISuggestion['type'], { label: string; color:
 }
 
 function HistoryDetailView({ task, onBack }: { task: ReviewTask; onBack: () => void }) {
+  const { retryPacsWrite, setCurrentTask, setActivePanel } = useReviewStore()
+  const { message } = App.useApp()
+  const [retrying, setRetrying] = useState(false)
   const accepted = task.suggestions.filter((s) => s.accepted === true)
   const rejected = task.suggestions.filter((s) => s.accepted === false)
   const pending = task.suggestions.filter((s) => s.accepted === null)
+
+  const handleRetry = async () => {
+    setRetrying(true)
+    try {
+      await retryPacsWrite(task.id)
+      message.success('PACS 写入重试已提交')
+    } finally {
+      setRetrying(false)
+    }
+  }
+
+  const handleContinueReview = () => {
+    setCurrentTask(task.id)
+    setActivePanel('confirm')
+  }
 
   return (
     <div style={{ padding: 20, height: '100%', overflow: 'auto' }}>
@@ -93,6 +114,27 @@ function HistoryDetailView({ task, onBack }: { task: ReviewTask; onBack: () => v
         }
         extra={
           <Space>
+            {task.pacsWriteStatus === 'failed' && (
+              <Space>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  onClick={handleRetry}
+                  loading={retrying}
+                  style={{ background: '#f59e0b', borderColor: '#f59e0b' }}
+                >
+                  重试写入 PACS
+                </Button>
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={handleContinueReview}
+                >
+                  修改后重试
+                </Button>
+              </Space>
+            )}
             <Text style={{ color: '#64748b', fontSize: 12 }}>检查号: {task.accessionNumber}</Text>
             {task.reviewedAt && <Text style={{ color: '#64748b', fontSize: 12 }}>审核时间: {task.reviewedAt}</Text>}
           </Space>
@@ -294,13 +336,13 @@ function HistoryDetailView({ task, onBack }: { task: ReviewTask; onBack: () => v
               <List
                 size="small"
                 dataSource={task.modifications}
-                renderItem={(item) => (
+                renderItem={(item: ModificationTrace) => (
                   <List.Item style={{ background: '#1e293b', marginBottom: 8, borderRadius: 4, padding: '10px 12px' }}>
                     <List.Item.Meta
-                      avatar={<Avatar size="small" style={{ background: '#8b5cf6', fontSize: 11 }}>修</Avatar>}
+                      avatar={<Avatar size="small" style={{ background: item.suggestionType ? '#8b5cf6' : '#f59e0b', fontSize: 11 }}>修</Avatar>}
                       title={
                         <span style={{ fontSize: 12, color: '#f1f5f9' }}>
-                          修改了「{suggestionTypeLabels[item.suggestionType].label}」
+                          修改了「{item.suggestionType ? suggestionTypeLabels[item.suggestionType].label : item.fieldName}」
                         </span>
                       }
                       description={
@@ -339,6 +381,7 @@ function HistoryPanel() {
   const totalApproved = tasks.filter((t) => t.status === 'approved').length
   const totalRejected = tasks.filter((t) => t.status === 'rejected').length
   const totalWriteFailed = tasks.filter((t) => t.pacsWriteStatus === 'failed').length
+  const totalHistory = tasks.filter((t) => t.status !== 'pending' || t.pacsWriteStatus === 'failed').length
 
   if (viewingTask) {
     return <HistoryDetailView task={viewingTask} onBack={() => setViewingTask(null)} />
@@ -495,7 +538,7 @@ function HistoryPanel() {
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
             <Statistic
               title={<span style={{ color: '#94a3b8', fontSize: 12 }}>历史记录总数</span>}
-              value={tasks.filter((t) => t.status !== 'pending').length}
+              value={totalHistory}
               prefix={<HistoryOutlined style={{ color: '#0ea5e9' }} />}
               valueStyle={{ color: '#0ea5e9', fontSize: 26, fontWeight: 600 }}
             />
@@ -540,7 +583,8 @@ function HistoryPanel() {
                 { value: 'all', label: '全部状态' },
                 { value: 'approved', label: '已通过' },
                 { value: 'rejected', label: '已驳回' },
-                { value: 'timeout', label: '已超时' }
+                { value: 'timeout', label: '已超时' },
+                { value: 'failed', label: '写入失败' }
               ]}
             />
           </div>

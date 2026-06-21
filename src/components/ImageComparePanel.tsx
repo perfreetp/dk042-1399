@@ -429,9 +429,6 @@ function ImageComparePanel() {
       onOk: () => {
         approveTask(currentTask.id)
         message.success('报告已通过并写入 PACS')
-        if (preferences.autoAdvance && pendingIndex < pendingTasks.length - 1) {
-          setCurrentTask(pendingTasks[pendingIndex + 1].id)
-        }
       }
     })
   }

@@ -113,6 +113,8 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
 
   toggleTaskSelection: (id) =>
     set((state) => {
+      const task = state.tasks.find((t) => t.id === id)
+      if (!task || task.status !== 'pending') return {}
       const newSet = new Set(state.selectedTaskIds)
       if (newSet.has(id)) {
         newSet.delete(id)
@@ -158,10 +160,15 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
           : t
       )
       const updatedTask = newTasks.find((t) => t.id === taskId)
-      return {
-        tasks: newTasks,
-        ...(updatedTask && { finalReport: generateFinalReport(updatedTask) })
+      if (updatedTask) {
+        const finalReport = generateFinalReport(updatedTask)
+        return {
+          tasks: newTasks.map((t) =>
+            t.id === taskId ? { ...t, finalReport } : t
+          )
+        }
       }
+      return { tasks: newTasks }
     }),
 
   rejectSuggestion: (taskId: string, suggestionId: string) =>
@@ -177,10 +184,15 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
           : t
       )
       const updatedTask = newTasks.find((t) => t.id === taskId)
-      return {
-        tasks: newTasks,
-        ...(updatedTask && { finalReport: generateFinalReport(updatedTask) })
+      if (updatedTask) {
+        const finalReport = generateFinalReport(updatedTask)
+        return {
+          tasks: newTasks.map((t) =>
+            t.id === taskId ? { ...t, finalReport } : t
+          )
+        }
       }
+      return { tasks: newTasks }
     }),
 
   modifySuggestion: (taskId, suggestionId, content) =>
@@ -216,35 +228,90 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
           : t
       )
       const updatedTask = newTasks.find((t) => t.id === taskId)
-      return {
-        tasks: newTasks,
-        ...(updatedTask && { finalReport: generateFinalReport(updatedTask) })
+      if (updatedTask) {
+        const finalReport = generateFinalReport(updatedTask)
+        return {
+          tasks: newTasks.map((t) =>
+            t.id === taskId ? { ...t, finalReport } : t
+          )
+        }
       }
+      return { tasks: newTasks }
     }),
 
   updateFinalReport: (taskId, report) =>
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t.id === taskId
-          ? {
-              ...t,
-              finalReport: {
-                ...t.finalReport,
-                ...report,
-                lastModifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+    set((state) => {
+      const task = state.tasks.find((t) => t.id === taskId)
+      if (!task) return {}
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
+      const modifications = [...task.modifications]
+      if (report.findings !== undefined && report.findings !== task.finalReport.findings) {
+        modifications.push({
+          id: `M${Date.now()}-F`,
+          fieldName: '最终报告-影像所见',
+          originalValue: task.finalReport.findings,
+          modifiedValue: report.findings,
+          modifiedAt: now,
+          operator: '当前医生'
+        } as ModificationTrace)
+      }
+      if (report.impression !== undefined && report.impression !== task.finalReport.impression) {
+        modifications.push({
+          id: `M${Date.now()}-I`,
+          fieldName: '最终报告-诊断意见',
+          originalValue: task.finalReport.impression,
+          modifiedValue: report.impression,
+          modifiedAt: now,
+          operator: '当前医生'
+        } as ModificationTrace)
+      }
+      return {
+        tasks: state.tasks.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                modifications,
+                finalReport: {
+                  ...t.finalReport,
+                  ...report,
+                  lastModifiedAt: now
+                }
               }
-            }
-          : t
-      )
-    })),
+            : t
+        )
+      }
+    }),
 
   regenerateFinalReport: (taskId) =>
     set((state) => {
       const task = state.tasks.find((t) => t.id === taskId)
       if (!task) return {}
+      const newFinalReport = generateFinalReport(task)
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
+      const modifications = [...task.modifications]
+      if (newFinalReport.findings !== task.finalReport.findings) {
+        modifications.push({
+          id: `M${Date.now()}-RF`,
+          fieldName: '最终报告-影像所见',
+          originalValue: task.finalReport.findings,
+          modifiedValue: newFinalReport.findings,
+          modifiedAt: now,
+          operator: '系统重新生成'
+        } as ModificationTrace)
+      }
+      if (newFinalReport.impression !== task.finalReport.impression) {
+        modifications.push({
+          id: `M${Date.now()}-RI`,
+          fieldName: '最终报告-诊断意见',
+          originalValue: task.finalReport.impression,
+          modifiedValue: newFinalReport.impression,
+          modifiedAt: now,
+          operator: '系统重新生成'
+        } as ModificationTrace)
+      }
       return {
         tasks: state.tasks.map((t) =>
-          t.id === taskId ? { ...t, finalReport: generateFinalReport(t) } : t
+          t.id === taskId ? { ...t, finalReport: newFinalReport, modifications } : t
         )
       }
     }),
@@ -549,7 +616,7 @@ export function useWorkbasketTasks() {
 
 export function useHistoryTasks() {
   return useReviewStore((state) => {
-    let result = state.tasks.filter((t) => t.status !== 'pending')
+    let result = state.tasks.filter((t) => t.status !== 'pending' || t.pacsWriteStatus === 'failed')
     if (state.historyFilter.patientName) {
       result = result.filter((t) => t.patientName.includes(state.historyFilter.patientName!))
     }
@@ -557,7 +624,11 @@ export function useHistoryTasks() {
       result = result.filter((t) => t.accessionNumber.includes(state.historyFilter.accessionNumber!))
     }
     if (state.historyFilter.status && state.historyFilter.status !== 'all') {
-      result = result.filter((t) => t.status === state.historyFilter.status)
+      if (state.historyFilter.status === 'failed') {
+        result = result.filter((t) => t.pacsWriteStatus === 'failed')
+      } else {
+        result = result.filter((t) => t.status === state.historyFilter.status)
+      }
     }
     return result
   })

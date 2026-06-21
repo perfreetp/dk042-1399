@@ -267,7 +267,7 @@ function BatchPanel() {
 
   const columns = [
     {
-      title: <Checkbox checked={selectedTaskIds.size === pendingTasks.length && pendingTasks.length > 0}
+      title: <Checkbox checked={selectedTasks.length === pendingTasks.length && pendingTasks.length > 0}
         onChange={(e) => e.target.checked ? selectAllTasks() : clearSelection()}
       />,
       dataIndex: 'select',
@@ -468,7 +468,7 @@ function BatchPanel() {
                 style={{ flex: 1, marginRight: 16 }}
               />
               <Space>
-                {selectedTaskIds.size > 0 && (
+                {selectedTasks.length > 0 && (
                   <Button
                     size="small"
                     icon={<FolderOpenOutlined />}
@@ -630,7 +630,7 @@ function BatchPanel() {
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
             <Statistic
               title={<span style={{ color: '#94a3b8', fontSize: 12 }}>已选中</span>}
-              value={selectedTaskIds.size}
+              value={selectedTasks.length}
               prefix={<CheckCircleOutlined style={{ color: '#10b981' }} />}
               valueStyle={{ color: '#10b981', fontSize: 28, fontWeight: 600 }}
             />
@@ -796,7 +796,7 @@ function BatchPanel() {
               待审任务列表
             </span>
             <Space>
-              <Button size="small" icon={<ClearOutlined />} onClick={clearSelection} disabled={selectedTaskIds.size === 0}>
+              <Button size="small" icon={<ClearOutlined />} onClick={clearSelection} disabled={selectedTasks.length === 0}>
                 清空选择
               </Button>
               <Button
@@ -804,19 +804,19 @@ function BatchPanel() {
                 danger
                 icon={<CloseCircleOutlined />}
                 onClick={() => setShowRejectModal(true)}
-                disabled={selectedTaskIds.size === 0}
+                disabled={selectedTasks.length === 0}
               >
-                批量驳回 ({selectedTaskIds.size})
+                批量驳回 ({selectedTasks.length})
               </Button>
               <Button
                 size="small"
                 type="primary"
                 icon={<CheckCircleOutlined />}
                 onClick={handleBatchApprove}
-                disabled={selectedTaskIds.size === 0}
+                disabled={selectedTasks.length === 0}
                 style={{ background: '#10b981', borderColor: '#10b981' }}
               >
-                批量通过 ({selectedTaskIds.size})
+                批量通过 ({selectedTasks.length})
               </Button>
             </Space>
           </div>
