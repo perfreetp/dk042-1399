@@ -16,7 +16,10 @@ import {
   Avatar,
   Statistic,
   Typography,
-  App
+  App,
+  Checkbox,
+  Modal,
+  Timeline
 } from 'antd'
 import {
   SearchOutlined,
@@ -29,10 +32,13 @@ import {
   ArrowLeftOutlined,
   WarningOutlined,
   SendOutlined,
-  ReloadOutlined
+  ReloadOutlined,
+  ClockCircleOutlined,
+  RollbackOutlined,
+  DiffOutlined
 } from '@ant-design/icons'
 import { useReviewStore, useHistoryTasks, useCurrentTask } from '../store/reviewStore'
-import type { ReviewTask, ExamType, ReviewStatus, AISuggestion, ModificationTrace } from '../types'
+import type { ReviewTask, ExamType, ReviewStatus, AISuggestion, ModificationTrace, PacsRetryRecord, FinalReportVersion } from '../types'
 import { useState } from 'react'
 
 const { Search } = Input
@@ -223,6 +229,74 @@ function HistoryDetailView({ task, onBack }: { task: ReviewTask; onBack: () => v
                 {task.finalReport.impression}
               </Paragraph>
             </div>
+          </Card>
+        )}
+
+        {task.pacsRetryHistory && task.pacsRetryHistory.length > 0 && (
+          <Card
+            size="small"
+            title={
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                <HistoryOutlined style={{ color: '#f59e0b', marginRight: 6 }} />
+                PACS 写入重试记录（共 {task.pacsRetryHistory.length} 次）
+              </span>
+            }
+            style={{ marginBottom: 16, background: '#1e293b', border: 'none' }}
+          >
+            <Timeline
+              style={{ padding: '0 8px' }}
+              items={task.pacsRetryHistory.slice().reverse().map((record: PacsRetryRecord) => ({
+                color: record.status === 'success' ? 'green' : 'red',
+                children: (
+                  <div>
+                    <div style={{ fontSize: 12, color: '#f1f5f9', marginBottom: 2 }}>
+                      {record.status === 'success' ? '写入成功' : '写入失败'}
+                      <span style={{ color: '#64748b', marginLeft: 8, fontSize: 11 }}>{record.attemptAt}</span>
+                    </div>
+                    {record.errorMessage && (
+                      <div style={{ fontSize: 11, color: '#ef4444' }}>
+                        失败原因：{record.errorMessage}
+                      </div>
+                    )}
+                  </div>
+                )
+              }))}
+            />
+          </Card>
+        )}
+
+        {task.finalReportVersions && task.finalReportVersions.length > 1 && (
+          <Card
+            size="small"
+            title={
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                <ClockCircleOutlined style={{ color: '#8b5cf6', marginRight: 6 }} />
+                报告版本历史（共 {task.finalReportVersions.length} 个版本）
+              </span>
+            }
+            style={{ marginBottom: 16, background: '#1e293b', border: 'none' }}
+          >
+            <List
+              size="small"
+              dataSource={task.finalReportVersions.slice().reverse()}
+              renderItem={(version: FinalReportVersion) => (
+                <List.Item style={{ padding: '8px 0', borderBottom: '1px solid #334155' }}>
+                  <List.Item.Meta
+                    title={
+                      <Space size={8}>
+                      <Tag color={version.createdBy === '当前医生' ? 'purple' : 'blue'} style={{ margin: 0, fontSize: 10 }}>
+                        {version.createdBy}
+                      </Tag>
+                      <span style={{ fontSize: 12, color: '#f1f5f9' }}>{version.createdAt}</span>
+                    </Space>
+                    }
+                    description={
+                      <div style={{ fontSize: 11, color: '#64748b' }}>{version.reason}</div>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
           </Card>
         )}
       </Card>

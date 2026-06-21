@@ -85,7 +85,8 @@ function BatchPanel() {
     batchAddToWorkbasket,
     addToWorkbasket,
     removeFromWorkbasket,
-    clearWorkbasket
+    clearWorkbasket,
+    lastBatchResult
   } = useReviewStore()
   const filteredTasks = useFilteredTasks()
   const { message, modal } = AntdApp.useApp()
@@ -784,6 +785,72 @@ function BatchPanel() {
           </Col>
         </Row>
       </Card>
+
+      {lastBatchResult && (
+        <Card
+          size="small"
+          className="panel-card"
+          style={{ border: 'none', marginBottom: 12, borderLeft: '3px solid #10b981' }}
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                <CheckCircleOutlined style={{ color: '#10b981', marginRight: 6 }} />
+                操作结果回执
+                <Tag color="blue" style={{ marginLeft: 8, fontSize: 10 }}>
+                  {lastBatchResult.timestamp}
+                </Tag>
+              </span>
+              <Space>
+                <Tag color="green" style={{ fontSize: 11 }}>
+                  成功 {lastBatchResult.successIds.length} 个
+                </Tag>
+                {lastBatchResult.skippedIds.length > 0 && (
+                  <Tag color="orange" style={{ fontSize: 11 }}>
+                    跳过 {lastBatchResult.skippedIds.length} 个
+                  </Tag>
+                )}
+              </Space>
+            </div>
+          }
+        >
+          {lastBatchResult.successIds.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
+                <CheckCircleOutlined style={{ color: '#10b981', marginRight: 4 }} />
+                成功处理的报告：
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {lastBatchResult.successIds.map((id) => {
+                  const task = tasks.find((t) => t.id === id)
+                  return (
+                    <Tag key={id} color="green" style={{ fontSize: 11 }}>
+                      {task?.patientName || id}
+                    </Tag>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {lastBatchResult.skippedIds.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
+                <WarningOutlined style={{ color: '#f59e0b', marginRight: 4 }} />
+                跳过的报告：
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {lastBatchResult.skippedIds.map(({ id, reason }) => {
+                  const task = tasks.find((t) => t.id === id)
+                  return (
+                    <Tag key={id} color="orange" style={{ fontSize: 11 }} title={reason}>
+                      {task?.patientName || id} - {reason}
+                    </Tag>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card
         size="small"

@@ -1,6 +1,6 @@
 import type { ReviewTask, RejectTemplate, ReviewStats, UserPreferences } from '../types'
 
-type MockTask = Omit<ReviewTask, 'pacsWriteStatus' | 'finalReport'>
+type MockTask = Omit<ReviewTask, 'pacsWriteStatus' | 'finalReport' | 'finalReportVersions' | 'pacsRetryHistory'>
 
 export const mockTasks: MockTask[] = [
   {

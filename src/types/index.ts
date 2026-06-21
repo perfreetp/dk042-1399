@@ -10,6 +10,29 @@ export interface FinalReport {
   lastModifiedAt: string
 }
 
+export interface FinalReportVersion {
+  id: string
+  findings: string
+  impression: string
+  createdAt: string
+  createdBy: string
+  reason: string
+}
+
+export interface PacsRetryRecord {
+  id: string
+  attemptAt: string
+  status: 'success' | 'failed'
+  errorMessage?: string
+}
+
+export interface BatchOperationResult {
+  type: 'approve' | 'reject' | 'addWorkbasket' | 'removeWorkbasket' | 'retryPacs'
+  successIds: string[]
+  skippedIds: { id: string; reason: string }[]
+  timestamp: string
+}
+
 export type UrgencyLevel = 'routine' | 'urgent' | 'emergency'
 
 export interface LesionMeasurement {
@@ -42,7 +65,7 @@ export interface ModificationTrace {
   modifiedValue: string
   modifiedAt: string
   operator: string
-  suggestionType: 'finding' | 'impression' | 'recommendation'
+  suggestionType?: 'finding' | 'impression' | 'recommendation'
 }
 
 export interface RejectTemplate {
@@ -84,6 +107,8 @@ export interface ReviewTask {
   pacsWriteStatus: PacsWriteStatus
   pacsWriteError?: string
   finalReport: FinalReport
+  finalReportVersions: FinalReportVersion[]
+  pacsRetryHistory: PacsRetryRecord[]
 }
 
 export interface ReviewStats {

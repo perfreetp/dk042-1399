@@ -7,7 +7,10 @@ import type {
   AISuggestion,
   ModificationTrace,
   PacsWriteStatus,
-  FinalReport
+  FinalReport,
+  FinalReportVersion,
+  PacsRetryRecord,
+  BatchOperationResult
 } from '../types'
 import { mockTasks, mockPreferences, mockStats, mockRejectTemplates } from '../data/mock'
 import dayjs from 'dayjs'
@@ -27,6 +30,7 @@ interface ReviewStore {
   filterStatus: string
   searchText: string
   historyFilter: { patientName?: string; accessionNumber?: string; status?: string }
+  lastBatchResult: BatchOperationResult | null
 
   setActivePanel: (panel: PanelKey) => void
   setCurrentTask: (id: string) => void
@@ -38,6 +42,7 @@ interface ReviewStore {
   setFilterStatus: (status: string) => void
   setSearchText: (text: string) => void
   setHistoryFilter: (filter: Partial<ReviewStore['historyFilter']>) => void
+  setLastBatchResult: (result: BatchOperationResult | null) => void
 
   acceptSuggestion: (taskId: string, suggestionId: string) => void
   rejectSuggestion: (taskId: string, suggestionId: string) => void
@@ -45,10 +50,12 @@ interface ReviewStore {
 
   updateFinalReport: (taskId: string, report: Partial<FinalReport>) => void
   regenerateFinalReport: (taskId: string) => void
+  restoreFinalReportVersion: (taskId: string, versionId: string) => void
 
   approveTask: (taskId: string) => Promise<void>
   rejectTask: (taskId: string, reason: string) => void
   retryPacsWrite: (taskId: string) => Promise<void>
+  batchRetryPacs: (taskIds: string[]) => Promise<void>
   setPacsWriteStatus: (taskId: string, status: PacsWriteStatus, error?: string) => void
 
   batchApprove: (taskIds: string[]) => void
@@ -86,11 +93,23 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     const fullTask = {
       ...t,
       pacsWriteStatus: 'idle' as PacsWriteStatus,
-      finalReport: { findings: '', impression: '', lastModifiedAt: '' }
+      finalReport: { findings: '', impression: '', lastModifiedAt: '' },
+      finalReportVersions: [] as FinalReportVersion[],
+      pacsRetryHistory: [] as PacsRetryRecord[]
     } as ReviewTask
+    const finalReport = generateFinalReport(fullTask)
+    const initialVersion: FinalReportVersion = {
+      id: `V${Date.now()}-0`,
+      findings: finalReport.findings,
+      impression: finalReport.impression,
+      createdAt: finalReport.lastModifiedAt,
+      createdBy: 'AI系统',
+      reason: 'AI初始生成'
+    }
     return {
       ...fullTask,
-      finalReport: generateFinalReport(fullTask)
+      finalReport,
+      finalReportVersions: [initialVersion]
     }
   }),
   currentTaskId: mockTasks[0]?.id || null,
@@ -98,6 +117,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   selectedTaskIds: new Set(),
   workbasketTaskIds: new Set(),
   workbasketOrder: [],
+  lastBatchResult: null,
   preferences: mockPreferences,
   stats: mockStats,
   rejectTemplates: mockRejectTemplates,
@@ -245,37 +265,54 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
       if (!task) return {}
       const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
       const modifications = [...task.modifications]
-      if (report.findings !== undefined && report.findings !== task.finalReport.findings) {
+      const hasFindingsChange = report.findings !== undefined && report.findings !== task.finalReport.findings
+      const hasImpressionChange = report.impression !== undefined && report.impression !== task.finalReport.impression
+      if (!hasFindingsChange && !hasImpressionChange) return {}
+
+      if (hasFindingsChange) {
         modifications.push({
           id: `M${Date.now()}-F`,
           fieldName: '最终报告-影像所见',
           originalValue: task.finalReport.findings,
-          modifiedValue: report.findings,
+          modifiedValue: report.findings!,
           modifiedAt: now,
           operator: '当前医生'
         } as ModificationTrace)
       }
-      if (report.impression !== undefined && report.impression !== task.finalReport.impression) {
+      if (hasImpressionChange) {
         modifications.push({
           id: `M${Date.now()}-I`,
           fieldName: '最终报告-诊断意见',
           originalValue: task.finalReport.impression,
-          modifiedValue: report.impression,
+          modifiedValue: report.impression!,
           modifiedAt: now,
           operator: '当前医生'
         } as ModificationTrace)
       }
+
+      const newFinalReport = {
+        ...task.finalReport,
+        ...report,
+        lastModifiedAt: now
+      }
+
+      const newVersion: FinalReportVersion = {
+        id: `V${Date.now()}`,
+        findings: newFinalReport.findings,
+        impression: newFinalReport.impression,
+        createdAt: now,
+        createdBy: '当前医生',
+        reason: '人工编辑修改'
+      }
+
       return {
         tasks: state.tasks.map((t) =>
           t.id === taskId
             ? {
                 ...t,
                 modifications,
-                finalReport: {
-                  ...t.finalReport,
-                  ...report,
-                  lastModifiedAt: now
-                }
+                finalReport: newFinalReport,
+                finalReportVersions: [...t.finalReportVersions, newVersion]
               }
             : t
         )
@@ -289,7 +326,11 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
       const newFinalReport = generateFinalReport(task)
       const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
       const modifications = [...task.modifications]
-      if (newFinalReport.findings !== task.finalReport.findings) {
+      const hasFindingsChange = newFinalReport.findings !== task.finalReport.findings
+      const hasImpressionChange = newFinalReport.impression !== task.finalReport.impression
+      if (!hasFindingsChange && !hasImpressionChange) return {}
+
+      if (hasFindingsChange) {
         modifications.push({
           id: `M${Date.now()}-RF`,
           fieldName: '最终报告-影像所见',
@@ -299,7 +340,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
           operator: '系统重新生成'
         } as ModificationTrace)
       }
-      if (newFinalReport.impression !== task.finalReport.impression) {
+      if (hasImpressionChange) {
         modifications.push({
           id: `M${Date.now()}-RI`,
           fieldName: '最终报告-诊断意见',
@@ -309,9 +350,78 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
           operator: '系统重新生成'
         } as ModificationTrace)
       }
+
+      const newVersion: FinalReportVersion = {
+        id: `V${Date.now()}`,
+        findings: newFinalReport.findings,
+        impression: newFinalReport.impression,
+        createdAt: now,
+        createdBy: '系统重新生成',
+        reason: '根据采纳建议重新生成'
+      }
+
       return {
         tasks: state.tasks.map((t) =>
-          t.id === taskId ? { ...t, finalReport: newFinalReport, modifications } : t
+          t.id === taskId
+            ? { ...t, finalReport: newFinalReport, modifications, finalReportVersions: [...t.finalReportVersions, newVersion] }
+            : t
+        )
+      }
+    }),
+
+  restoreFinalReportVersion: (taskId, versionId) =>
+    set((state) => {
+      const task = state.tasks.find((t) => t.id === taskId)
+      if (!task) return {}
+      const version = task.finalReportVersions.find((v) => v.id === versionId)
+      if (!version) return {}
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
+      const modifications = [...task.modifications]
+
+      if (version.findings !== task.finalReport.findings) {
+        modifications.push({
+          id: `M${Date.now()}-RFV`,
+          fieldName: '最终报告-影像所见',
+          originalValue: task.finalReport.findings,
+          modifiedValue: version.findings,
+          modifiedAt: now,
+          operator: '当前医生'
+        } as ModificationTrace)
+      }
+      if (version.impression !== task.finalReport.impression) {
+        modifications.push({
+          id: `M${Date.now()}-RIV`,
+          fieldName: '最终报告-诊断意见',
+          originalValue: task.finalReport.impression,
+          modifiedValue: version.impression,
+          modifiedAt: now,
+          operator: '当前医生'
+        } as ModificationTrace)
+      }
+
+      const newVersion: FinalReportVersion = {
+        id: `V${Date.now()}`,
+        findings: version.findings,
+        impression: version.impression,
+        createdAt: now,
+        createdBy: '当前医生',
+        reason: `恢复至版本 ${version.id.slice(0, 12)}`
+      }
+
+      return {
+        tasks: state.tasks.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                modifications,
+                finalReport: {
+                  findings: version.findings,
+                  impression: version.impression,
+                  lastModifiedAt: now
+                },
+                finalReportVersions: [...t.finalReportVersions, newVersion]
+              }
+            : t
         )
       }
     }),
@@ -331,6 +441,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     if (!task) return
 
     const inWorkbasket = state.workbasketTaskIds.has(taskId)
+    const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
 
     set((s) => ({
       tasks: s.tasks.map((t) =>
@@ -343,18 +454,32 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     const shouldFail = Math.random() < 0.08
 
     if (shouldFail) {
+      const errorMsg = 'PACS 连接超时，请重试'
+      const retryRecord: PacsRetryRecord = {
+        id: `R${Date.now()}`,
+        attemptAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        status: 'failed',
+        errorMessage: errorMsg
+      }
       set((s) => ({
         tasks: s.tasks.map((t) =>
           t.id === taskId
             ? {
                 ...t,
                 pacsWriteStatus: 'failed' as PacsWriteStatus,
-                pacsWriteError: 'PACS 连接超时，请重试'
+                pacsWriteError: errorMsg,
+                pacsRetryHistory: [...t.pacsRetryHistory, retryRecord]
               }
             : t
         )
       }))
       return
+    }
+
+    const successRecord: PacsRetryRecord = {
+      id: `R${Date.now()}`,
+      attemptAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      status: 'success'
     }
 
     set((s) => ({
@@ -364,8 +489,9 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
               ...t,
               status: 'approved',
               reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-              pacsWriteStatus: 'success' as PacsWriteStatus
+              reviewedAt: now,
+              pacsWriteStatus: 'success' as PacsWriteStatus,
+              pacsRetryHistory: [...t.pacsRetryHistory, successRecord]
             }
           : t
       ),
@@ -383,7 +509,11 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
 
   retryPacsWrite: async (taskId) => {
     const state = get()
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task) return
+
     const inWorkbasket = state.workbasketTaskIds.has(taskId)
+    const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
 
     set((s) => ({
       tasks: s.tasks.map((t) =>
@@ -396,18 +526,32 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     const shouldFail = Math.random() < 0.15
 
     if (shouldFail) {
+      const errorMsg = 'PACS 服务暂不可用，请稍后重试'
+      const retryRecord: PacsRetryRecord = {
+        id: `R${Date.now()}`,
+        attemptAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        status: 'failed',
+        errorMessage: errorMsg
+      }
       set((s) => ({
         tasks: s.tasks.map((t) =>
           t.id === taskId
             ? {
                 ...t,
                 pacsWriteStatus: 'failed' as PacsWriteStatus,
-                pacsWriteError: 'PACS 服务暂不可用，请稍后重试'
+                pacsWriteError: errorMsg,
+                pacsRetryHistory: [...t.pacsRetryHistory, retryRecord]
               }
             : t
         )
       }))
       return
+    }
+
+    const successRecord: PacsRetryRecord = {
+      id: `R${Date.now()}`,
+      attemptAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      status: 'success'
     }
 
     set((s) => ({
@@ -417,8 +561,9 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
               ...t,
               status: 'approved',
               reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-              pacsWriteStatus: 'success' as PacsWriteStatus
+              reviewedAt: now,
+              pacsWriteStatus: 'success' as PacsWriteStatus,
+              pacsRetryHistory: [...t.pacsRetryHistory, successRecord]
             }
           : t
       ),
@@ -433,6 +578,40 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
       setTimeout(() => get().advanceWorkbasket(), 300)
     }
   },
+
+  batchRetryPacs: async (taskIds) => {
+    const successIds: string[] = []
+    const skippedIds: { id: string; reason: string }[] = []
+
+    for (const id of taskIds) {
+      const task = get().tasks.find((t) => t.id === id)
+      if (!task) {
+        skippedIds.push({ id, reason: '任务不存在' })
+        continue
+      }
+      if (task.pacsWriteStatus !== 'failed') {
+        skippedIds.push({ id, reason: '非写入失败状态' })
+        continue
+      }
+      await get().retryPacsWrite(id)
+      const updatedTask = get().tasks.find((t) => t.id === id)
+      if (updatedTask?.pacsWriteStatus === 'success') {
+        successIds.push(id)
+      } else {
+        skippedIds.push({ id, reason: updatedTask?.pacsWriteError || '重试失败' })
+      }
+    }
+
+    const result: BatchOperationResult = {
+      type: 'retryPacs',
+      successIds,
+      skippedIds,
+      timestamp: dayjs().format('YYYY-MM-DD HH:mm:ss')
+    }
+    set({ lastBatchResult: result })
+  },
+
+  setLastBatchResult: (result) => set({ lastBatchResult: result }),
 
   rejectTask: (taskId, reason) => {
     const state = get()
@@ -464,47 +643,81 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   },
 
   batchApprove: (taskIds) =>
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        taskIds.includes(t.id)
-          ? {
-              ...t,
-              status: 'approved',
-              reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-              pacsWriteStatus: 'success' as PacsWriteStatus
-            }
-          : t
-      ),
-      selectedTaskIds: new Set(),
-      stats: {
-        ...state.stats,
-        todayReviewed: state.stats.todayReviewed + taskIds.length,
-        todayApproved: state.stats.todayApproved + taskIds.length
+    set((state) => {
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
+      const successIds: string[] = []
+      const skippedIds: { id: string; reason: string }[] = []
+      const newTasks = state.tasks.map((t) => {
+        if (!taskIds.includes(t.id)) return t
+        if (t.status !== 'pending') {
+          skippedIds.push({ id: t.id, reason: '已处理，跳过' })
+          return t
+        }
+        successIds.push(t.id)
+        return {
+          ...t,
+          status: 'approved' as const,
+          reviewerId: 'U001',
+          reviewedAt: now,
+          pacsWriteStatus: 'success' as const
+        }
+      })
+      const result: BatchOperationResult = {
+        type: 'approve',
+        successIds,
+        skippedIds,
+        timestamp: now
       }
-    })),
+      return {
+        tasks: newTasks,
+        selectedTaskIds: new Set(),
+        lastBatchResult: result,
+        stats: {
+          ...state.stats,
+          todayReviewed: state.stats.todayReviewed + successIds.length,
+          todayApproved: state.stats.todayApproved + successIds.length
+        }
+      }
+    }),
 
   batchReject: (taskIds, reason) =>
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        taskIds.includes(t.id)
-          ? {
-              ...t,
-              status: 'rejected',
-              rejectReason: reason,
-              reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-              pacsWriteStatus: 'idle' as PacsWriteStatus
-            }
-          : t
-      ),
-      selectedTaskIds: new Set(),
-      stats: {
-        ...state.stats,
-        todayReviewed: state.stats.todayReviewed + taskIds.length,
-        todayRejected: state.stats.todayRejected + taskIds.length
+    set((state) => {
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
+      const successIds: string[] = []
+      const skippedIds: { id: string; reason: string }[] = []
+      const newTasks = state.tasks.map((t) => {
+        if (!taskIds.includes(t.id)) return t
+        if (t.status !== 'pending') {
+          skippedIds.push({ id: t.id, reason: '已处理，跳过' })
+          return t
+        }
+        successIds.push(t.id)
+        return {
+          ...t,
+          status: 'rejected' as const,
+          rejectReason: reason,
+          reviewerId: 'U001',
+          reviewedAt: now,
+          pacsWriteStatus: 'idle' as const
+        }
+      })
+      const result: BatchOperationResult = {
+        type: 'reject',
+        successIds,
+        skippedIds,
+        timestamp: now
       }
-    })),
+      return {
+        tasks: newTasks,
+        selectedTaskIds: new Set(),
+        lastBatchResult: result,
+        stats: {
+          ...state.stats,
+          todayReviewed: state.stats.todayReviewed + successIds.length,
+          todayRejected: state.stats.todayRejected + successIds.length
+        }
+      }
+    }),
 
   addToWorkbasket: (taskId) =>
     set((state) => {
@@ -533,18 +746,39 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
 
   batchAddToWorkbasket: (taskIds) =>
     set((state) => {
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss')
       const newSet = new Set(state.workbasketTaskIds)
       const newOrder = [...state.workbasketOrder]
+      const successIds: string[] = []
+      const skippedIds: { id: string; reason: string }[] = []
       taskIds.forEach((id) => {
         const task = state.tasks.find((t) => t.id === id)
-        if (task && task.status === 'pending' && !newSet.has(id)) {
-          newSet.add(id)
-          newOrder.push(id)
+        if (!task) {
+          skippedIds.push({ id, reason: '任务不存在' })
+          return
         }
+        if (task.status !== 'pending') {
+          skippedIds.push({ id, reason: '已处理，跳过' })
+          return
+        }
+        if (newSet.has(id)) {
+          skippedIds.push({ id, reason: '已在工作篮中' })
+          return
+        }
+        newSet.add(id)
+        newOrder.push(id)
+        successIds.push(id)
       })
+      const result: BatchOperationResult = {
+        type: 'addWorkbasket',
+        successIds,
+        skippedIds,
+        timestamp: now
+      }
       return {
         workbasketTaskIds: newSet,
-        workbasketOrder: newOrder
+        workbasketOrder: newOrder,
+        lastBatchResult: result
       }
     }),
 

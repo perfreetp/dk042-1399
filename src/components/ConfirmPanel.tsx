@@ -38,10 +38,12 @@ import {
   ArrowRightOutlined,
   CopyOutlined,
   WarningOutlined,
-  FolderOpenOutlined
+  FolderOpenOutlined,
+  ClockCircleOutlined,
+  DiffOutlined
 } from '@ant-design/icons'
 import { useReviewStore, useCurrentTask, useFilteredTasks } from '../store/reviewStore'
-import type { AISuggestion, ExamType, UrgencyLevel } from '../types'
+import type { AISuggestion, ExamType, UrgencyLevel, FinalReportVersion } from '../types'
 import dayjs from 'dayjs'
 
 const { TextArea } = Input
@@ -243,6 +245,7 @@ function ConfirmPanel() {
     retryPacsWrite,
     updateFinalReport,
     regenerateFinalReport,
+    restoreFinalReportVersion,
     rejectTemplates,
     preferences,
     workbasketTaskIds,
@@ -260,6 +263,8 @@ function ConfirmPanel() {
   const [editingImpression, setEditingImpression] = useState(false)
   const [editFindings, setEditFindings] = useState('')
   const [editImpression, setEditImpression] = useState('')
+  const [showVersionHistory, setShowVersionHistory] = useState(false)
+  const [compareVersionId, setCompareVersionId] = useState<string | null>(null)
 
   const pendingTasks = filteredTasks.filter((t) => t.status === 'pending')
   const pendingIndex = pendingTasks.findIndex((t) => t.id === currentTask?.id)
@@ -345,11 +350,8 @@ function ConfirmPanel() {
       onOk: () => {
         rejectTask(currentTask.id, finalReason)
         message.success('报告已驳回')
-        if (preferences.autoAdvance && pendingIndex < pendingTasks.length - 1) {
-          setCurrentTask(pendingTasks[pendingIndex + 1].id)
-          setRejectReason('')
-          setCustomRejectReason('')
-        }
+        setRejectReason('')
+        setCustomRejectReason('')
       }
     })
   }
@@ -757,6 +759,104 @@ function ConfirmPanel() {
                   className="panel-card"
                   style={{ border: 'none', marginBottom: 16 }}
                   title={
+                    <span style={{ fontSize: 13, fontWeight: 500, cursor: 'pointer' }} onClick={() => setShowVersionHistory(!showVersionHistory)}>
+                      <ClockCircleOutlined style={{ color: '#8b5cf6', marginRight: 6 }} />
+                      报告版本历史（{currentTask.finalReportVersions.length}个版本）
+                      <Text style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>
+                        {showVersionHistory ? '点击收起' : '点击展开'}
+                      </Text>
+                    </span>
+                  }
+                >
+                  {showVersionHistory && (
+                    <div>
+                      {currentTask.finalReportVersions.slice().reverse().map((v, idx) => {
+                        const isCurrent = idx === 0
+                        const isComparing = compareVersionId === v.id
+                        return (
+                          <div
+                            key={v.id}
+                            style={{
+                              padding: '10px 12px',
+                              background: isComparing ? '#1e3a5f' : '#1e293b',
+                              borderRadius: 4,
+                              marginBottom: 8,
+                              borderLeft: `3px solid ${isCurrent ? '#10b981' : '#475569'}`
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                              <Space size={8}>
+                                {isCurrent && <Tag color="green" style={{ margin: 0, fontSize: 10 }}>当前版本</Tag>}
+                                <Tag color={v.createdBy === '当前医生' ? 'purple' : 'blue'} style={{ margin: 0, fontSize: 10 }}>
+                                  {v.createdBy}
+                                </Tag>
+                                <Text style={{ fontSize: 11, color: '#94a3b8' }}>{v.createdAt}</Text>
+                              </Space>
+                              <Space size={4}>
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<DiffOutlined />}
+                                  onClick={() => setCompareVersionId(isComparing ? null : v.id)}
+                                >
+                                  {isComparing ? '关闭对比' : '对比'}
+                                </Button>
+                                {!isCurrent && (
+                                  <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<RollbackOutlined />}
+                                    onClick={() => {
+                                      modal.confirm({
+                                        title: '确认恢复此版本？',
+                                        content: `恢复到 ${v.createdAt} 的版本，当前版本会被保存为新版本。`,
+                                        okText: '确认恢复',
+                                        cancelText: '取消',
+                                        onOk: () => {
+                                          restoreFinalReportVersion(currentTask.id, v.id)
+                                          message.success('已恢复到该版本')
+                                          setCompareVersionId(null)
+                                        }
+                                      })
+                                    }}
+                                    disabled={currentTask.pacsWriteStatus === 'writing'}
+                                  >
+                                    恢复
+                                  </Button>
+                                )}
+                              </Space>
+                            </div>
+                            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
+                              {v.reason}
+                            </div>
+                            {isComparing && (
+                              <div style={{ padding: 10, background: '#0f172a', borderRadius: 4 }}>
+                                <div style={{ marginBottom: 8 }}>
+                                  <Tag color="blue" style={{ marginBottom: 6, fontSize: 10 }}>影像所见对比</Tag>
+                                  <div style={{ fontSize: 12, color: '#f1f5f9', lineHeight: 1.7, whiteSpace: 'pre-wrap', padding: 8, background: '#1e293b', borderRadius: 4 }}>
+                                    {v.findings}
+                                  </div>
+                                </div>
+                                <div>
+                                  <Tag color="purple" style={{ marginBottom: 6, fontSize: 10 }}>诊断意见对比</Tag>
+                                  <div style={{ fontSize: 12, color: '#f1f5f9', lineHeight: 1.7, whiteSpace: 'pre-wrap', padding: 8, background: '#1e293b', borderRadius: 4 }}>
+                                    {v.impression}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </Card>
+
+                <Card
+                  size="small"
+                  className="panel-card"
+                  style={{ border: 'none', marginBottom: 16 }}
+                  title={
                     <span style={{ fontSize: 13, fontWeight: 500 }}>
                       <SendOutlined style={{ color: '#10b981', marginRight: 6 }} />
                       详细内容对比
@@ -870,7 +970,7 @@ function ConfirmPanel() {
                             avatar={<Avatar size="small" style={{ background: '#8b5cf6', fontSize: 12 }}>修</Avatar>}
                             title={
                               <span style={{ fontSize: 12, color: '#f1f5f9' }}>
-                                修改了「{suggestionTypeLabels[item.suggestionType].label}」内容
+                                修改了「{item.suggestionType ? suggestionTypeLabels[item.suggestionType].label : '报告'}」内容
                               </span>
                             }
                             description={
