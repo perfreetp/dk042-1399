@@ -7,6 +7,8 @@ export type UrgencyLevel = 'routine' | 'urgent' | 'emergency'
 export interface LesionMeasurement {
   id: string
   name: string
+  type: string
+  size: number
   previousValue?: number
   currentValue: number
   unit: string
@@ -32,6 +34,7 @@ export interface ModificationTrace {
   modifiedValue: string
   modifiedAt: string
   operator: string
+  suggestionType: 'finding' | 'impression' | 'recommendation'
 }
 
 export interface RejectTemplate {
@@ -50,6 +53,8 @@ export interface ReviewTask {
   examType: ExamType
   examBodyPart: string
   accessionNumber: string
+  examNumber: string
+  isEmergency: boolean
   studyDate: string
   urgency: UrgencyLevel
   aiAnalyzedAt: string

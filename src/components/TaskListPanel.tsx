@@ -1,4 +1,4 @@
-import { Card, Row, Col, Input, Select, Tag, Table, Button, Tooltip, Progress, Statistic, Empty } from 'antd'
+import { Card, Row, Col, Input, Select, Tag, Table, Button, Tooltip, Progress, Statistic, Empty, Space, Checkbox, App as AntdApp } from 'antd'
 import {
   SearchOutlined,
   ClockCircleOutlined,
@@ -6,10 +6,14 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   CaretUpOutlined,
-  EyeOutlined
+  EyeOutlined,
+  PlusOutlined,
+  MinusOutlined,
+  FolderOpenOutlined
 } from '@ant-design/icons'
 import { useReviewStore, useFilteredTasks } from '../store/reviewStore'
 import type { ReviewTask, ExamType, ReviewStatus, UrgencyLevel } from '../types'
+import { useState } from 'react'
 import dayjs from 'dayjs'
 
 const { Search } = Input
@@ -50,9 +54,23 @@ function TaskListPanel() {
     setFilterStatus,
     searchText,
     setSearchText,
-    preferences
+    preferences,
+    workbasketTaskIds,
+    addToWorkbasket,
+    removeFromWorkbasket,
+    batchAddToWorkbasket,
+    clearSelection,
+    selectedTaskIds,
+    toggleTaskSelection,
+    selectAllTasks
   } = useReviewStore()
   const filteredTasks = useFilteredTasks()
+  const { message } = AntdApp.useApp()
+  const [onlyWorkbasket, setOnlyWorkbasket] = useState(false)
+
+  const displayTasks = onlyWorkbasket
+    ? filteredTasks.filter((t) => workbasketTaskIds.has(t.id))
+    : filteredTasks
 
   const summaryByType = (Object.keys(examTypeLabels) as ExamType[]).map((type) => ({
     type,
@@ -75,6 +93,25 @@ function TaskListPanel() {
   }
 
   const columns = [
+    {
+      title: (
+        <Checkbox
+          checked={selectedTaskIds.size === displayTasks.filter((t) => t.status === 'pending').length && displayTasks.filter((t) => t.status === 'pending').length > 0}
+          onChange={(e) => e.target.checked ? selectAllTasks() : clearSelection()}
+        />
+      ),
+      dataIndex: 'select',
+      width: 45,
+      fixed: 'left' as const,
+      render: (_: unknown, record: ReviewTask) => (
+        <Checkbox
+          checked={selectedTaskIds.has(record.id)}
+          onChange={() => toggleTaskSelection(record.id)}
+          onClick={(e) => e.stopPropagation()}
+          disabled={record.status !== 'pending'}
+        />
+      )
+    },
     {
       title: '优先级',
       dataIndex: 'urgency',
@@ -201,9 +238,37 @@ function TaskListPanel() {
       }
     },
     {
+      title: '工作篮',
+      key: 'workbasket',
+      width: 80,
+      render: (_: unknown, record: ReviewTask) => {
+        const inBasket = workbasketTaskIds.has(record.id)
+        return (
+          <Tooltip title={inBasket ? '移出工作篮' : '加入工作篮'}>
+            <Button
+              type={inBasket ? 'primary' : 'default'}
+              size="small"
+              icon={inBasket ? <MinusOutlined /> : <PlusOutlined />}
+              onClick={(e) => {
+                e.stopPropagation()
+                inBasket ? removeFromWorkbasket(record.id) : addToWorkbasket(record.id)
+              }}
+              disabled={record.status !== 'pending'}
+              style={{
+                background: inBasket ? '#8b5cf6' : 'transparent',
+                borderColor: inBasket ? '#8b5cf6' : '#475569'
+              }}
+            >
+              {inBasket ? '已加' : '加入'}
+            </Button>
+          </Tooltip>
+        )
+      }
+    },
+    {
       title: '操作',
       key: 'action',
-      width: 90,
+      width: 80,
       fixed: 'right' as const,
       render: (_: unknown, record: ReviewTask) => (
         <Tooltip title="开始审核">
@@ -224,7 +289,7 @@ function TaskListPanel() {
   return (
     <div style={{ padding: 20, height: '100%', overflow: 'auto' }}>
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}>
+        <Col span={5}>
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
             <Statistic
               title={<span style={{ color: '#94a3b8', fontSize: 12 }}>待审总数</span>}
@@ -234,7 +299,7 @@ function TaskListPanel() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={5}>
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
             <Statistic
               title={<span style={{ color: '#94a3b8', fontSize: 12 }}>超时未审</span>}
@@ -244,7 +309,7 @@ function TaskListPanel() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={5}>
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
             <Statistic
               title={<span style={{ color: '#94a3b8', fontSize: 12 }}>急诊待审</span>}
@@ -254,13 +319,31 @@ function TaskListPanel() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={5}>
+          <Card
+            size="small"
+            className="panel-card"
+            style={{ border: 'none', cursor: 'pointer' }}
+            onClick={() => setOnlyWorkbasket(!onlyWorkbasket)}
+          >
+            <Statistic
+              title={
+                <span style={{ color: onlyWorkbasket ? '#0ea5e9' : '#94a3b8', fontSize: 12 }}>
+                  <FolderOpenOutlined /> 审核工作篮
+                </span>
+              }
+              value={workbasketTaskIds.size}
+              valueStyle={{ color: onlyWorkbasket ? '#0ea5e9' : '#8b5cf6', fontSize: 28, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
             <Statistic
               title={<span style={{ color: '#94a3b8', fontSize: 12 }}>异常发现</span>}
               value={tasks.filter((t) => t.hasAbnormal && t.status === 'pending').length}
-              prefix={<CaretUpOutlined style={{ color: '#8b5cf6' }} />}
-              valueStyle={{ color: '#8b5cf6', fontSize: 28, fontWeight: 600 }}
+              prefix={<CaretUpOutlined style={{ color: '#f59e0b' }} />}
+              valueStyle={{ color: '#f59e0b', fontSize: 28, fontWeight: 600 }}
             />
           </Card>
         </Col>
@@ -350,15 +433,39 @@ function TaskListPanel() {
                 { value: 'rejected', label: '已驳回' }
               ]}
             />
+            <Checkbox
+              checked={onlyWorkbasket}
+              onChange={(e) => setOnlyWorkbasket(e.target.checked)}
+            >
+              <span style={{ fontSize: 12, color: onlyWorkbasket ? '#0ea5e9' : '#94a3b8' }}>
+                <FolderOpenOutlined /> 仅看工作篮
+              </span>
+            </Checkbox>
+            {selectedTaskIds.size > 0 && (
+              <Button
+                size="small"
+                icon={<FolderOpenOutlined />}
+                onClick={() => {
+                  batchAddToWorkbasket(Array.from(selectedTaskIds))
+                  clearSelection()
+                  message.success(`已将 ${selectedTaskIds.size} 份报告加入工作篮`)
+                }}
+                style={{ background: '#8b5cf6', borderColor: '#8b5cf6' }}
+                type="primary"
+              >
+                批量加入工作篮 ({selectedTaskIds.size})
+              </Button>
+            )}
           </div>
           <div style={{ color: '#64748b', fontSize: 12 }}>
-            共 {filteredTasks.length} 条记录
+            共 {displayTasks.length} 条记录
+            {onlyWorkbasket && <Tag color="#8b5cf6" style={{ marginLeft: 8 }}>工作篮模式</Tag>}
           </div>
         </div>
 
-        {filteredTasks.length > 0 ? (
+        {displayTasks.length > 0 ? (
           <Table
-            dataSource={filteredTasks}
+            dataSource={displayTasks}
             rowKey="id"
             columns={columns as any}
             size="small"
@@ -367,7 +474,7 @@ function TaskListPanel() {
               showSizeChanger: false,
               showTotal: (total) => `共 ${total} 条`
             }}
-            scroll={{ x: 1300, y: 'calc(100vh - 480px)' }}
+            scroll={{ x: 1350, y: 'calc(100vh - 480px)' }}
             onRow={(record) => ({
               onDoubleClick: () => handleOpenReview(record),
               style: { cursor: 'pointer' }

@@ -34,7 +34,10 @@ import {
   SendOutlined,
   ThunderboltOutlined,
   InfoCircleOutlined,
-  WarningOutlined
+  WarningOutlined,
+  FolderOpenOutlined,
+  MinusOutlined,
+  DeleteOutlined
 } from '@ant-design/icons'
 import { useReviewStore, useFilteredTasks } from '../store/reviewStore'
 import type { ReviewTask, ExamType, UrgencyLevel } from '../types'
@@ -77,11 +80,16 @@ function BatchPanel() {
     batchApprove,
     batchReject,
     preferences,
-    rejectTemplates
+    rejectTemplates,
+    workbasketTaskIds,
+    batchAddToWorkbasket,
+    removeFromWorkbasket,
+    clearWorkbasket
   } = useReviewStore()
   const filteredTasks = useFilteredTasks()
   const { message, modal } = AntdApp.useApp()
 
+  const [activeTab, setActiveTab] = useState<'rules' | 'workbasket'>('rules')
   const [batchType, setBatchType] = useState<'CT' | 'MRI' | 'DR' | 'US' | 'all'>('all')
   const [minConfidence, setMinConfidence] = useState(90)
   const [onlyNormal, setOnlyNormal] = useState(false)
@@ -91,6 +99,7 @@ function BatchPanel() {
 
   const pendingTasks = filteredTasks.filter((t) => t.status === 'pending')
   const timeoutTasks = pendingTasks.filter((t) => t.waitingMinutes >= preferences.reviewReminderMinutes)
+  const workbasketTasks = tasks.filter((t) => workbasketTaskIds.has(t.id) && t.status === 'pending')
 
   const batchRules: BatchRule[] = [
     {
@@ -365,6 +374,177 @@ function BatchPanel() {
 
   return (
     <div style={{ padding: 20, height: '100%', overflow: 'auto' }}>
+      <Card size="small" className="panel-card" style={{ border: 'none', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #334155', paddingBottom: 12, marginBottom: 16 }}>
+          <Button
+            type={activeTab === 'rules' ? 'primary' : 'default'}
+            onClick={() => setActiveTab('rules')}
+            style={{ background: activeTab === 'rules' ? '#0ea5e9' : 'transparent', borderColor: activeTab === 'rules' ? '#0ea5e9' : '#475569' }}
+          >
+            <ThunderboltOutlined /> 智能批量规则
+          </Button>
+          <Button
+            type={activeTab === 'workbasket' ? 'primary' : 'default'}
+            onClick={() => setActiveTab('workbasket')}
+            style={{ background: activeTab === 'workbasket' ? '#8b5cf6' : 'transparent', borderColor: activeTab === 'workbasket' ? '#8b5cf6' : '#475569' }}
+          >
+            <FolderOpenOutlined /> 工作篮管理 ({workbasketTasks.length})
+          </Button>
+        </div>
+
+        {activeTab === 'workbasket' ? (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <Alert
+                type="info"
+                showIcon
+                icon={<InfoCircleOutlined />}
+                message={
+                  <span>
+                    工作篮中当前有 <strong style={{ color: '#8b5cf6' }}>{workbasketTasks.length}</strong> 份待审核报告，
+                    处理时会按加入顺序自动前进
+                  </span>
+                }
+                style={{ flex: 1, marginRight: 16 }}
+              />
+              <Space>
+                {selectedTaskIds.size > 0 && (
+                  <Button
+                    size="small"
+                    icon={<FolderOpenOutlined />}
+                    onClick={() => {
+                      const pendingToAdd = tasks.filter((t) => selectedTaskIds.has(t.id) && t.status === 'pending')
+                      batchAddToWorkbasket(pendingToAdd.map((t) => t.id))
+                      clearSelection()
+                      message.success(`已将 ${pendingToAdd.length} 份报告加入工作篮`)
+                    }}
+                    style={{ background: '#8b5cf6', borderColor: '#8b5cf6' }}
+                    type="primary"
+                  >
+                    将选中加入工作篮
+                  </Button>
+                )}
+                {workbasketTasks.length > 0 && (
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => {
+                      modal.confirm({
+                        title: '确认清空工作篮？',
+                        content: `将移除工作篮中 ${workbasketTasks.length} 份报告`,
+                        okText: '确认清空',
+                        onOk: () => {
+                          clearWorkbasket()
+                          message.success('工作篮已清空')
+                        }
+                      })
+                    }}
+                  >
+                    清空工作篮
+                  </Button>
+                )}
+              </Space>
+            </div>
+
+            {workbasketTasks.length === 0 ? (
+              <Empty
+                description={
+                  <span style={{ color: '#64748b' }}>
+                    <FolderOpenOutlined style={{ marginRight: 4 }} />
+                    工作篮为空，在左侧列表中选择报告加入
+                  </span>
+                }
+                style={{ padding: 60 }}
+              />
+            ) : (
+              <List
+                size="small"
+                dataSource={workbasketTasks}
+                renderItem={(item, index) => (
+                  <List.Item
+                    style={{
+                      padding: '12px 16px',
+                      marginBottom: 8,
+                      background: '#1e293b',
+                      borderRadius: 4,
+                      border: '1px solid #334155'
+                    }}
+                    actions={[
+                      <Button
+                        key="remove"
+                        size="small"
+                        icon={<MinusOutlined />}
+                        onClick={() => {
+                          removeFromWorkbasket(item.id)
+                          message.success(`已将 ${item.patientName} 移出工作篮`)
+                        }}
+                      >
+                        移出
+                      </Button>,
+                      <Button
+                        key="review"
+                        type="primary"
+                        size="small"
+                        icon={<EyeOutlined />}
+                        onClick={() => {
+                          setCurrentTask(item.id)
+                          setActivePanel('compare')
+                        }}
+                        style={{ background: '#0ea5e9', borderColor: '#0ea5e9' }}
+                      >
+                        开始审核
+                      </Button>
+                    ]}
+                  >
+                    <List.Item.Meta
+                      avatar={
+                        <div
+                          style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: '50%',
+                            background: '#8b5cf6',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#fff',
+                            fontWeight: 600,
+                            fontSize: 14
+                          }}
+                        >
+                          {index + 1}
+                        </div>
+                      }
+                      title={
+                        <span style={{ color: '#f1f5f9', fontSize: 13 }}>
+                          {item.patientName} · {examTypeLabels[item.examType]}{item.examBodyPart}
+                          {item.isEmergency && (
+                            <Tag color="error" style={{ marginLeft: 8, fontSize: 10 }}>急诊</Tag>
+                          )}
+                        </span>
+                      }
+                      description={
+                        <span style={{ color: '#64748b', fontSize: 12 }}>
+                          {item.patientId} · {item.examNumber} · 置信度 {Math.round(item.aiConfidence * 100)}%
+                          {item.previousExamDate && (
+                            <Tag color="blue" style={{ marginLeft: 8, fontSize: 10 }}>有前片</Tag>
+                          )}
+                        </span>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </div>
+        ) : (
+          <div></div>
+        )}
+      </Card>
+
+      {activeTab === 'rules' && (
+        <>
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small" className="panel-card" style={{ border: 'none' }}>
@@ -662,6 +842,8 @@ function BatchPanel() {
           />
         </div>
       </Modal>
+        </>
+      )}
     </div>
   )
 }

@@ -37,7 +37,8 @@ import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
   CopyOutlined,
-  WarningOutlined
+  WarningOutlined,
+  FolderOpenOutlined
 } from '@ant-design/icons'
 import { useReviewStore, useCurrentTask, useFilteredTasks } from '../store/reviewStore'
 import type { AISuggestion, ExamType, UrgencyLevel } from '../types'
@@ -68,7 +69,7 @@ const suggestionTypeLabels: Record<AISuggestion['type'], { label: string; color:
 }
 
 function SuggestionCard({ suggestion, taskId }: { suggestion: AISuggestion; taskId: string }) {
-  const { toggleSuggestion, modifySuggestion, preferences } = useReviewStore()
+  const { acceptSuggestion, rejectSuggestion, modifySuggestion, preferences } = useReviewStore()
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState(suggestion.modifiedContent || suggestion.content)
 
@@ -143,24 +144,24 @@ function SuggestionCard({ suggestion, taskId }: { suggestion: AISuggestion; task
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 11, color: status.color }}>{status.text}</span>
           <Space size={4}>
-            <Tooltip title="采纳此建议">
+            <Tooltip title={suggestion.accepted === true ? '取消采纳' : '采纳此建议'}>
               <Button
                 size="small"
                 type={suggestion.accepted === true ? 'primary' : 'text'}
                 icon={<CheckOutlined />}
-                onClick={() => toggleSuggestion(taskId, suggestion.id)}
+                onClick={() => acceptSuggestion(taskId, suggestion.id)}
                 style={{
                   color: suggestion.accepted === true ? '#fff' : '#10b981',
                   background: suggestion.accepted === true ? '#10b981' : 'transparent'
                 }}
               />
             </Tooltip>
-            <Tooltip title="拒绝此建议">
+            <Tooltip title={suggestion.accepted === false ? '取消拒绝' : '拒绝此建议'}>
               <Button
                 size="small"
                 type={suggestion.accepted === false ? 'primary' : 'text'}
                 icon={<CloseOutlined />}
-                onClick={() => toggleSuggestion(taskId, suggestion.id)}
+                onClick={() => rejectSuggestion(taskId, suggestion.id)}
                 style={{
                   color: suggestion.accepted === false ? '#fff' : '#ef4444',
                   background: suggestion.accepted === false ? '#ef4444' : 'transparent'
@@ -240,7 +241,8 @@ function ConfirmPanel() {
     approveTask,
     rejectTask,
     rejectTemplates,
-    preferences
+    preferences,
+    workbasketTaskIds
   } = useReviewStore()
   const currentTask = useCurrentTask()
   const filteredTasks = useFilteredTasks()
@@ -253,6 +255,10 @@ function ConfirmPanel() {
 
   const pendingTasks = filteredTasks.filter((t) => t.status === 'pending')
   const pendingIndex = pendingTasks.findIndex((t) => t.id === currentTask?.id)
+
+  const workbasketArray = Array.from(workbasketTaskIds)
+  const workbasketTasks = tasks.filter((t) => workbasketTaskIds.has(t.id) && t.status === 'pending')
+  const currentWorkbasketIndex = workbasketArray.indexOf(currentTask?.id || '')
 
   const handlePrev = () => {
     if (pendingIndex > 0) setCurrentTask(pendingTasks[pendingIndex - 1].id)
@@ -423,6 +429,42 @@ function ConfirmPanel() {
         </div>
       </div>
 
+      {workbasketTasks.length > 0 && (
+        <div
+          style={{
+            padding: '8px 16px',
+            borderBottom: '1px solid #475569',
+            background: '#1e293b',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            overflowX: 'auto'
+          }}
+        >
+          <span style={{ color: '#8b5cf6', fontSize: 12, whiteSpace: 'nowrap' }}>
+            <FolderOpenOutlined /> 工作篮 ({workbasketTasks.length}):
+          </span>
+          {workbasketTasks.map((task, index) => (
+            <Button
+              key={task.id}
+              size="small"
+              type={currentTask?.id === task.id ? 'primary' : 'default'}
+              onClick={() => setCurrentTask(task.id)}
+              style={{
+                background: currentTask?.id === task.id ? '#8b5cf6' : 'transparent',
+                borderColor: currentTask?.id === task.id ? '#8b5cf6' : '#475569',
+                whiteSpace: 'nowrap',
+                minWidth: 100
+              }}
+            >
+              <span style={{ fontSize: 10, color: '#64748b', marginRight: 4 }}>{index + 1}.</span>
+              {task.patientName}
+              {task.isEmergency && <span style={{ color: '#ef4444', marginLeft: 4 }}>!</span>}
+            </Button>
+          ))}
+        </div>
+      )}
+
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
           <div
@@ -452,6 +494,19 @@ function ConfirmPanel() {
                         offset={[4, -2]}
                         style={{ backgroundColor: pendingCount > 0 ? '#f59e0b' : '#10b981', marginLeft: 6 }}
                       />
+                    </span>
+                  )
+                },
+                {
+                  key: 'preview',
+                  label: (
+                    <span>
+                      <SendOutlined /> 写入预览
+                      {acceptedCount > 0 && (
+                        <Tag color="green" style={{ fontSize: 10, padding: '0 4px', marginLeft: 6 }}>
+                          {acceptedCount}条采纳
+                        </Tag>
+                      )}
                     </span>
                   )
                 },
@@ -513,6 +568,146 @@ function ConfirmPanel() {
                   style={{ marginTop: 20, background: 'transparent', border: '1px dashed #475569' }}
                 />
               </>
+            ) : activeTab === 'preview' ? (
+              <div>
+                <Card
+                  size="small"
+                  className="panel-card"
+                  style={{ border: 'none', marginBottom: 16 }}
+                  title={
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>
+                      <SendOutlined style={{ color: '#0ea5e9', marginRight: 6 }} />
+                      即将写入 PACS 的内容预览
+                    </span>
+                  }
+                  extra={
+                    <Alert
+                      type="warning"
+                      showIcon
+                      icon={<WarningOutlined />}
+                      message="请仔细核对后再确认写入"
+                      style={{ padding: '4px 12px', margin: 0, border: 'none', background: 'transparent' }}
+                    />
+                  }
+                >
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <CheckCircleOutlined style={{ color: '#10b981' }} />
+                      影像所见与诊断意见（将写入正式报告）
+                      <Tag color="green" style={{ marginLeft: 'auto' }}>{acceptedCount}条采纳</Tag>
+                    </div>
+                    {currentTask.suggestions.filter((s) => s.accepted === true).length > 0 ? (
+                      <div style={{ padding: 16, background: '#1e293b', borderRadius: 4, borderLeft: '3px solid #10b981' }}>
+                        {currentTask.suggestions
+                          .filter((s) => s.accepted === true)
+                          .map((s) => (
+                            <div key={s.id} style={{ marginBottom: 12 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <Tag color={suggestionTypeLabels[s.type].color} style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>
+                                  {suggestionTypeLabels[s.type].label}
+                                </Tag>
+                                {s.isModified && (
+                                  <Tag color="purple" style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>
+                                    <EditOutlined /> 人工修改
+                                  </Tag>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 13, color: '#f1f5f9', lineHeight: 1.7, paddingLeft: 4 }}>
+                                {s.modifiedContent || s.content}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ) : (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        icon={<InfoCircleOutlined />}
+                        message="暂无采纳内容"
+                        description="请先在左侧采纳需要写入报告的建议"
+                        style={{ background: 'transparent', border: '1px dashed #475569' }}
+                      />
+                    )}
+                  </div>
+
+                  {rejectedCount > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <CloseCircleOutlined style={{ color: '#ef4444' }} />
+                        已拒绝内容（不会写入报告）
+                        <Tag color="error" style={{ marginLeft: 'auto' }}>{rejectedCount}条拒绝</Tag>
+                      </div>
+                      <div style={{ padding: 16, background: '#1e293b', borderRadius: 4, borderLeft: '3px solid #ef4444', opacity: 0.7 }}>
+                        {currentTask.suggestions
+                          .filter((s) => s.accepted === false)
+                          .map((s) => (
+                            <div key={s.id} style={{ marginBottom: 12, textDecoration: 'line-through' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                <Tag color={suggestionTypeLabels[s.type].color} style={{ fontSize: 10, padding: '0 4px', margin: 0, opacity: 0.5 }}>
+                                  {suggestionTypeLabels[s.type].label}
+                                </Tag>
+                              </div>
+                              <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.7, paddingLeft: 4 }}>
+                                {s.modifiedContent || s.content}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {pendingCount > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <QuestionOutlined style={{ color: '#f59e0b' }} />
+                        待决定内容（默认不写入报告）
+                        <Tag color="warning" style={{ marginLeft: 'auto' }}>{pendingCount}条待决定</Tag>
+                      </div>
+                      <Alert
+                        type="warning"
+                        showIcon
+                        icon={<WarningOutlined />}
+                        message={`还有 ${pendingCount} 条建议尚未决定`}
+                        description="请返回「AI报告建议」页面对这些建议进行处理，未决定的内容不会写入正式报告"
+                        style={{ background: 'transparent', border: '1px dashed #f59e0b' }}
+                      />
+                    </div>
+                  )}
+
+                  {modificationCount > 0 && (
+                    <div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <EditOutlined style={{ color: '#8b5cf6' }} />
+                        人工修改记录
+                        <Tag color="purple" style={{ marginLeft: 'auto' }}>{modificationCount}处修改</Tag>
+                      </div>
+                      <List
+                        size="small"
+                        dataSource={currentTask.modifications}
+                        renderItem={(item) => (
+                          <List.Item style={{ background: '#1e293b', marginBottom: 8, borderRadius: 4, padding: '12px 16px' }}>
+                            <List.Item.Meta
+                              avatar={<Avatar size="small" style={{ background: '#8b5cf6', fontSize: 12 }}>修</Avatar>}
+                              title={
+                                <span style={{ fontSize: 12, color: '#f1f5f9' }}>
+                                  修改了「{suggestionTypeLabels[item.suggestionType].label}」内容
+                                </span>
+                              }
+                              description={
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                                  <div style={{ textDecoration: 'line-through', marginBottom: 4 }}>原文：{item.originalValue}</div>
+                                  <div style={{ color: '#10b981' }}>修改：{item.modifiedValue}</div>
+                                  <div style={{ marginTop: 4, fontSize: 10 }}>{item.modifiedAt} · {item.operator}</div>
+                                </div>
+                              }
+                            />
+                          </List.Item>
+                        )}
+                      />
+                    </div>
+                  )}
+                </Card>
+              </div>
             ) : (
               <Card className="panel-card" style={{ border: 'none' }} size="small" title="审核修改记录">
                 {currentTask.modifications.length > 0 ? (

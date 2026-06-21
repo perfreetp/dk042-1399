@@ -8,6 +8,7 @@ interface ReviewStore {
   currentTaskId: string | null
   activePanel: PanelKey
   selectedTaskIds: Set<string>
+  workbasketTaskIds: Set<string>
   preferences: UserPreferences
   stats: ReviewStats
   rejectTemplates: typeof mockRejectTemplates
@@ -26,12 +27,19 @@ interface ReviewStore {
   setFilterStatus: (status: string) => void
   setSearchText: (text: string) => void
 
-  toggleSuggestion: (taskId: string, suggestionId: string) => void
+  acceptSuggestion: (taskId: string, suggestionId: string) => void
+  rejectSuggestion: (taskId: string, suggestionId: string) => void
   modifySuggestion: (taskId: string, suggestionId: string, content: string) => void
   approveTask: (taskId: string) => void
   rejectTask: (taskId: string, reason: string) => void
   batchApprove: (taskIds: string[]) => void
   batchReject: (taskIds: string[], reason: string) => void
+
+  addToWorkbasket: (taskId: string) => void
+  removeFromWorkbasket: (taskId: string) => void
+  clearWorkbasket: () => void
+  batchAddToWorkbasket: (taskIds: string[]) => void
+  advanceWorkbasket: () => void
 
   updatePreferences: (prefs: Partial<UserPreferences>) => void
 }
@@ -41,6 +49,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   currentTaskId: mockTasks[0]?.id || null,
   activePanel: 'list',
   selectedTaskIds: new Set(),
+  workbasketTaskIds: new Set(),
   preferences: mockPreferences,
   stats: mockStats,
   rejectTemplates: mockRejectTemplates,
@@ -76,7 +85,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   setFilterStatus: (status) => set({ filterStatus: status }),
   setSearchText: (text) => set({ searchText: text }),
 
-  toggleSuggestion: (taskId, suggestionId) =>
+  acceptSuggestion: (taskId: string, suggestionId: string) =>
     set((state) => ({
       tasks: state.tasks.map((t) =>
         t.id === taskId
@@ -84,7 +93,23 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
               ...t,
               suggestions: t.suggestions.map((s) =>
                 s.id === suggestionId
-                  ? { ...s, accepted: s.accepted === null ? true : s.accepted === true ? false : null }
+                  ? { ...s, accepted: s.accepted === true ? null : true }
+                  : s
+              )
+            }
+          : t
+      )
+    })),
+
+  rejectSuggestion: (taskId: string, suggestionId: string) =>
+    set((state) => ({
+      tasks: state.tasks.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              suggestions: t.suggestions.map((s) =>
+                s.id === suggestionId
+                  ? { ...s, accepted: s.accepted === false ? null : false }
                   : s
               )
             }
@@ -93,38 +118,44 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     })),
 
   modifySuggestion: (taskId, suggestionId, content) =>
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t.id === taskId
-          ? {
-              ...t,
-              suggestions: t.suggestions.map((s) =>
-                s.id === suggestionId
-                  ? {
-                      ...s,
-                      modifiedContent: content,
-                      isModified: content !== s.content,
-                      accepted: content !== s.content ? true : s.accepted
-                    }
-                  : s
-              ),
-              modifications: [
-                ...t.modifications,
-                {
-                  id: `M${Date.now()}`,
-                  fieldName: '报告建议',
-                  originalValue: t.suggestions.find((s) => s.id === suggestionId)?.content || '',
-                  modifiedValue: content,
-                  modifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-                  operator: '当前医生'
-                } as ModificationTrace
-              ]
-            }
-          : t
-      )
-    })),
+    set((state) => {
+      const suggestion = state.tasks.find((t) => t.id === taskId)?.suggestions.find((s) => s.id === suggestionId)
+      return {
+        tasks: state.tasks.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                suggestions: t.suggestions.map((s) =>
+                  s.id === suggestionId
+                    ? {
+                        ...s,
+                        modifiedContent: content,
+                        isModified: content !== s.content,
+                        accepted: content !== s.content ? true : s.accepted
+                      }
+                    : s
+                ),
+                modifications: [
+                  ...t.modifications,
+                  {
+                    id: `M${Date.now()}`,
+                    fieldName: '报告建议',
+                    originalValue: suggestion?.content || '',
+                    modifiedValue: content,
+                    modifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+                    operator: '当前医生',
+                    suggestionType: suggestion?.type || 'finding'
+                  } as ModificationTrace
+                ]
+              }
+            : t
+        )
+      }
+    }),
 
-  approveTask: (taskId) =>
+  approveTask: (taskId) => {
+    const state = get()
+    const inWorkbasket = state.workbasketTaskIds.has(taskId)
     set((state) => ({
       tasks: state.tasks.map((t) =>
         t.id === taskId
@@ -141,9 +172,15 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
         todayReviewed: state.stats.todayReviewed + 1,
         todayApproved: state.stats.todayApproved + 1
       }
-    })),
+    }))
+    if (inWorkbasket && get().preferences.autoAdvance) {
+      setTimeout(() => get().advanceWorkbasket(), 100)
+    }
+  },
 
-  rejectTask: (taskId, reason) =>
+  rejectTask: (taskId, reason) => {
+    const state = get()
+    const inWorkbasket = state.workbasketTaskIds.has(taskId)
     set((state) => ({
       tasks: state.tasks.map((t) =>
         t.id === taskId
@@ -161,7 +198,11 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
         todayReviewed: state.stats.todayReviewed + 1,
         todayRejected: state.stats.todayRejected + 1
       }
-    })),
+    }))
+    if (inWorkbasket && get().preferences.autoAdvance) {
+      setTimeout(() => get().advanceWorkbasket(), 100)
+    }
+  },
 
   batchApprove: (taskIds) =>
     set((state) => ({
@@ -203,6 +244,48 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
         todayRejected: state.stats.todayRejected + taskIds.length
       }
     })),
+
+  addToWorkbasket: (taskId) =>
+    set((state) => {
+      const newSet = new Set(state.workbasketTaskIds)
+      newSet.add(taskId)
+      return { workbasketTaskIds: newSet }
+    }),
+
+  removeFromWorkbasket: (taskId) =>
+    set((state) => {
+      const newSet = new Set(state.workbasketTaskIds)
+      newSet.delete(taskId)
+      return { workbasketTaskIds: newSet }
+    }),
+
+  clearWorkbasket: () => set({ workbasketTaskIds: new Set() }),
+
+  batchAddToWorkbasket: (taskIds) =>
+    set((state) => {
+      const newSet = new Set(state.workbasketTaskIds)
+      taskIds.forEach((id) => newSet.add(id))
+      return { workbasketTaskIds: newSet }
+    }),
+
+  advanceWorkbasket: () => {
+    const state = get()
+    const workbasketArray = Array.from(state.workbasketTaskIds)
+    const currentIndex = workbasketArray.indexOf(state.currentTaskId || '')
+    if (currentIndex >= 0 && currentIndex < workbasketArray.length - 1) {
+      const nextTaskId = workbasketArray[currentIndex + 1]
+      const newSet = new Set(state.workbasketTaskIds)
+      newSet.delete(state.currentTaskId || '')
+      set({
+        workbasketTaskIds: newSet,
+        currentTaskId: nextTaskId
+      })
+    } else if (currentIndex >= 0) {
+      const newSet = new Set(state.workbasketTaskIds)
+      newSet.delete(state.currentTaskId || '')
+      set({ workbasketTaskIds: newSet })
+    }
+  },
 
   updatePreferences: (prefs) =>
     set((state) => ({
