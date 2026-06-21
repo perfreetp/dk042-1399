@@ -1,6 +1,8 @@
 import type { ReviewTask, RejectTemplate, ReviewStats, UserPreferences } from '../types'
 
-export const mockTasks: ReviewTask[] = [
+type MockTask = Omit<ReviewTask, 'pacsWriteStatus' | 'finalReport'>
+
+export const mockTasks: MockTask[] = [
   {
     id: 'T202401150001',
     patientId: 'P0012345',

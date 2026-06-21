@@ -83,6 +83,7 @@ function BatchPanel() {
     rejectTemplates,
     workbasketTaskIds,
     batchAddToWorkbasket,
+    addToWorkbasket,
     removeFromWorkbasket,
     clearWorkbasket
   } = useReviewStore()
@@ -350,25 +351,84 @@ function BatchPanel() {
       }
     },
     {
+      title: '工作篮',
+      dataIndex: 'workbasket',
+      width: 100,
+      render: (_: unknown, record: ReviewTask) => {
+        const inBasket = workbasketTaskIds.has(record.id)
+        if (record.status !== 'pending') {
+          return <Tag color="default" style={{ fontSize: 11 }}>已处理</Tag>
+        }
+        return inBasket ? (
+          <Tooltip title="已在工作篮">
+            <Tag color="purple" style={{ fontSize: 11 }}>
+              <FolderOpenOutlined /> 已加入
+            </Tag>
+          </Tooltip>
+        ) : (
+          <Tooltip title="未加入工作篮">
+            <Tag color="default" style={{ fontSize: 11 }}>
+              未加入
+            </Tag>
+          </Tooltip>
+        )
+      }
+    },
+    {
       title: '操作',
       key: 'action',
-      width: 80,
+      width: 100,
       fixed: 'right' as const,
-      render: (_: unknown, record: ReviewTask) => (
-        <Tooltip title="查看详情">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => {
-              setCurrentTask(record.id)
-              setActivePanel('compare')
-            }}
-          >
-            查看
-          </Button>
-        </Tooltip>
-      )
+      render: (_: unknown, record: ReviewTask) => {
+        const inBasket = workbasketTaskIds.has(record.id)
+        if (record.status !== 'pending') {
+          return (
+            <Tooltip title="查看历史">
+              <Button
+                type="link"
+                size="small"
+                icon={<EyeOutlined />}
+                onClick={() => {
+                  setCurrentTask(record.id)
+                  setActivePanel('history')
+                }}
+              >
+                历史
+              </Button>
+            </Tooltip>
+          )
+        }
+        return (
+          <Space size={4}>
+            <Tooltip title={inBasket ? '移出工作篮' : '加入工作篮'}>
+              <Button
+                type="text"
+                size="small"
+                icon={inBasket ? <MinusOutlined /> : <FolderOpenOutlined />}
+                onClick={() =>
+                  inBasket ? removeFromWorkbasket(record.id) : addToWorkbasket(record.id)
+                }
+                style={{ color: inBasket ? '#8b5cf6' : '#64748b' }}
+              >
+                {inBasket ? '移出' : '加入'}
+              </Button>
+            </Tooltip>
+            <Tooltip title="查看详情">
+              <Button
+                type="link"
+                size="small"
+                icon={<EyeOutlined />}
+                onClick={() => {
+                  setCurrentTask(record.id)
+                  setActivePanel('compare')
+                }}
+              >
+                查看
+              </Button>
+            </Tooltip>
+          </Space>
+        )
+      }
     }
   ]
 
@@ -762,9 +822,9 @@ function BatchPanel() {
           </div>
         }
       >
-        {pendingTasks.length > 0 ? (
+        {tasks.length > 0 ? (
           <Table
-            dataSource={pendingTasks}
+            dataSource={tasks}
             rowKey="id"
             columns={columns as any}
             size="small"
@@ -775,7 +835,10 @@ function BatchPanel() {
               onChange: (keys) => {
                 clearSelection()
                 keys.forEach((k) => toggleTaskSelection(String(k)))
-              }
+              },
+              getCheckboxProps: (record: ReviewTask) => ({
+                disabled: record.status !== 'pending'
+              })
             }}
             onRow={(record) => ({
               onDoubleClick: () => {

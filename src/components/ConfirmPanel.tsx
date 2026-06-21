@@ -240,9 +240,13 @@ function ConfirmPanel() {
     setActivePanel,
     approveTask,
     rejectTask,
+    retryPacsWrite,
+    updateFinalReport,
+    regenerateFinalReport,
     rejectTemplates,
     preferences,
-    workbasketTaskIds
+    workbasketTaskIds,
+    workbasketOrder
   } = useReviewStore()
   const currentTask = useCurrentTask()
   const filteredTasks = useFilteredTasks()
@@ -252,13 +256,18 @@ function ConfirmPanel() {
   const [customRejectReason, setCustomRejectReason] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('全部')
   const [activeTab, setActiveTab] = useState('suggestions')
+  const [editingFindings, setEditingFindings] = useState(false)
+  const [editingImpression, setEditingImpression] = useState(false)
+  const [editFindings, setEditFindings] = useState('')
+  const [editImpression, setEditImpression] = useState('')
 
   const pendingTasks = filteredTasks.filter((t) => t.status === 'pending')
   const pendingIndex = pendingTasks.findIndex((t) => t.id === currentTask?.id)
 
-  const workbasketArray = Array.from(workbasketTaskIds)
-  const workbasketTasks = tasks.filter((t) => workbasketTaskIds.has(t.id) && t.status === 'pending')
-  const currentWorkbasketIndex = workbasketArray.indexOf(currentTask?.id || '')
+  const workbasketTasks = workbasketOrder
+    .map((id) => tasks.find((t) => t.id === id))
+    .filter((t): t is typeof tasks[0] => !!t && t.status === 'pending')
+  const currentWorkbasketIndex = workbasketOrder.indexOf(currentTask?.id || '')
 
   const handlePrev = () => {
     if (pendingIndex > 0) setCurrentTask(pendingTasks[pendingIndex - 1].id)
@@ -299,44 +308,16 @@ function ConfirmPanel() {
     }
   }
 
-  const doApprove = () => {
+  const doApprove = async () => {
     if (!currentTask) return
-    modal.confirm({
-      title: '确认写入 PACS',
-      icon: <SendOutlined />,
-      content: (
-        <div>
-          <p>以下内容将作为正式报告写入 PACS 系统：</p>
-          <div style={{ padding: 12, background: '#0f172a', borderRadius: 4, marginTop: 8 }}>
-            {currentTask.suggestions
-              .filter((s) => s.accepted === true)
-              .map((s) => (
-                <div key={s.id} style={{ fontSize: 12, color: '#f1f5f9', marginBottom: 8, lineHeight: 1.6 }}>
-                  <Tag color={suggestionTypeLabels[s.type].color} style={{ fontSize: 10, padding: '0 4px' }}>
-                    {suggestionTypeLabels[s.type].label}
-                  </Tag>
-                  <span style={{ marginLeft: 6 }}>{s.modifiedContent || s.content}</span>
-                </div>
-              ))}
-            {currentTask.suggestions.filter((s) => s.accepted === true).length === 0 && (
-              <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: 10 }}>（无采纳内容）</div>
-            )}
-          </div>
-        </div>
-      ),
-      okText: '确认写入',
-      cancelText: '取消',
-      okButtonProps: { type: 'primary' },
-      onOk: () => {
-        approveTask(currentTask.id)
-        message.success('报告已通过并写入 PACS')
-        if (preferences.autoAdvance && pendingIndex < pendingTasks.length - 1) {
-          setCurrentTask(pendingTasks[pendingIndex + 1].id)
-          setRejectReason('')
-          setCustomRejectReason('')
-        }
-      }
-    })
+    setRejectReason('')
+    setCustomRejectReason('')
+    await approveTask(currentTask.id)
+  }
+
+  const handleRetryWrite = async () => {
+    if (!currentTask) return
+    await retryPacsWrite(currentTask.id)
   }
 
   const handleReject = () => {
@@ -570,30 +551,222 @@ function ConfirmPanel() {
               </>
             ) : activeTab === 'preview' ? (
               <div>
+                {currentTask.pacsWriteStatus === 'writing' && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    icon={<Progress type="circle" percent={100} size={24} status="active" />}
+                    message="正在写入 PACS 系统..."
+                    description="请稍候，报告内容正在同步到影像归档系统。写入期间请勿关闭页面。"
+                    style={{ marginBottom: 16, background: 'rgba(14,165,233,0.1)', border: '1px solid #0ea5e9' }}
+                  />
+                )}
+                {currentTask.pacsWriteStatus === 'success' && (
+                  <Alert
+                    type="success"
+                    showIcon
+                    icon={<CheckCircleOutlined />}
+                    message="PACS 写入成功"
+                    description={`报告已于 ${currentTask.reviewedAt} 成功写入 PACS 系统。`}
+                    style={{ marginBottom: 16 }}
+                  />
+                )}
+                {currentTask.pacsWriteStatus === 'failed' && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    icon={<CloseCircleOutlined />}
+                    message={`PACS 写入失败：${currentTask.pacsWriteError || '未知错误'}`}
+                    description="审核决定已保留，点击右侧「重试写入」按钮重新提交，无需重新采纳建议。"
+                    style={{ marginBottom: 16 }}
+                  />
+                )}
+
                 <Card
                   size="small"
                   className="panel-card"
                   style={{ border: 'none', marginBottom: 16 }}
                   title={
                     <span style={{ fontSize: 13, fontWeight: 500 }}>
-                      <SendOutlined style={{ color: '#0ea5e9', marginRight: 6 }} />
-                      即将写入 PACS 的内容预览
+                      <FileTextOutlined style={{ color: '#0ea5e9', marginRight: 6 }} />
+                      最终报告（写入前可微调）
                     </span>
                   }
                   extra={
-                    <Alert
-                      type="warning"
-                      showIcon
-                      icon={<WarningOutlined />}
-                      message="请仔细核对后再确认写入"
-                      style={{ padding: '4px 12px', margin: 0, border: 'none', background: 'transparent' }}
-                    />
+                    <Space>
+                      <Tooltip title="根据采纳建议重新生成">
+                        <Button
+                          size="small"
+                          icon={<RollbackOutlined />}
+                          onClick={() => regenerateFinalReport(currentTask.id)}
+                          disabled={currentTask.pacsWriteStatus === 'writing'}
+                        >
+                          重新生成
+                        </Button>
+                      </Tooltip>
+                      <span style={{ fontSize: 11, color: '#64748b' }}>
+                        最后更新: {currentTask.finalReport.lastModifiedAt}
+                      </span>
+                    </Space>
+                  }
+                >
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Tag color="blue" style={{ margin: 0 }}>影像所见</Tag>
+                        {acceptedCount > 0 && (
+                          <span style={{ color: '#64748b' }}>基于 {acceptedCount} 条采纳内容</span>
+                        )}
+                      </div>
+                      {!editingFindings ? (
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={() => {
+                            setEditFindings(currentTask.finalReport.findings)
+                            setEditingFindings(true)
+                          }}
+                          disabled={currentTask.pacsWriteStatus !== 'idle' && currentTask.pacsWriteStatus !== 'failed'}
+                        >
+                          编辑
+                        </Button>
+                      ) : (
+                        <Space size={4}>
+                          <Button
+                            size="small"
+                            onClick={() => setEditingFindings(false)}
+                          >
+                            取消
+                          </Button>
+                          <Button
+                            size="small"
+                            type="primary"
+                            icon={<SaveOutlined />}
+                            onClick={() => {
+                              updateFinalReport(currentTask.id, { findings: editFindings })
+                              setEditingFindings(false)
+                              message.success('影像所见已更新')
+                            }}
+                          >
+                            保存
+                          </Button>
+                        </Space>
+                      )}
+                    </div>
+                    {editingFindings ? (
+                      <TextArea
+                        value={editFindings}
+                        onChange={(e) => setEditFindings(e.target.value)}
+                        rows={6}
+                        autoSize={{ minRows: 4, maxRows: 10 }}
+                        style={{ fontSize: 13, lineHeight: 1.7 }}
+                      />
+                    ) : (
+                      <Paragraph
+                        style={{
+                          padding: 14,
+                          background: '#1e293b',
+                          borderRadius: 4,
+                          borderLeft: '3px solid #0ea5e9',
+                          fontSize: 13,
+                          color: '#f1f5f9',
+                          marginBottom: 0,
+                          lineHeight: 1.8,
+                          whiteSpace: 'pre-wrap',
+                          minHeight: 60
+                        }}
+                      >
+                        {currentTask.finalReport.findings}
+                      </Paragraph>
+                    )}
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Tag color="purple" style={{ margin: 0 }}>诊断意见</Tag>
+                      </div>
+                      {!editingImpression ? (
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={() => {
+                            setEditImpression(currentTask.finalReport.impression)
+                            setEditingImpression(true)
+                          }}
+                          disabled={currentTask.pacsWriteStatus !== 'idle' && currentTask.pacsWriteStatus !== 'failed'}
+                        >
+                          编辑
+                        </Button>
+                      ) : (
+                        <Space size={4}>
+                          <Button
+                            size="small"
+                            onClick={() => setEditingImpression(false)}
+                          >
+                            取消
+                          </Button>
+                          <Button
+                            size="small"
+                            type="primary"
+                            icon={<SaveOutlined />}
+                            onClick={() => {
+                              updateFinalReport(currentTask.id, { impression: editImpression })
+                              setEditingImpression(false)
+                              message.success('诊断意见已更新')
+                            }}
+                          >
+                            保存
+                          </Button>
+                        </Space>
+                      )}
+                    </div>
+                    {editingImpression ? (
+                      <TextArea
+                        value={editImpression}
+                        onChange={(e) => setEditImpression(e.target.value)}
+                        rows={4}
+                        autoSize={{ minRows: 3, maxRows: 8 }}
+                        style={{ fontSize: 13, lineHeight: 1.7 }}
+                      />
+                    ) : (
+                      <Paragraph
+                        style={{
+                          padding: 14,
+                          background: '#1e293b',
+                          borderRadius: 4,
+                          borderLeft: '3px solid #8b5cf6',
+                          fontSize: 13,
+                          color: '#f1f5f9',
+                          marginBottom: 0,
+                          lineHeight: 1.8,
+                          whiteSpace: 'pre-wrap',
+                          minHeight: 50
+                        }}
+                      >
+                        {currentTask.finalReport.impression}
+                      </Paragraph>
+                    )}
+                  </div>
+                </Card>
+
+                <Card
+                  size="small"
+                  className="panel-card"
+                  style={{ border: 'none', marginBottom: 16 }}
+                  title={
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>
+                      <SendOutlined style={{ color: '#10b981', marginRight: 6 }} />
+                      详细内容对比
+                    </span>
                   }
                 >
                   <div style={{ marginBottom: 16 }}>
                     <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                       <CheckCircleOutlined style={{ color: '#10b981' }} />
-                      影像所见与诊断意见（将写入正式报告）
+                      采纳详情（将写入正式报告）
                       <Tag color="green" style={{ marginLeft: 'auto' }}>{acceptedCount}条采纳</Tag>
                     </div>
                     {currentTask.suggestions.filter((s) => s.accepted === true).length > 0 ? (
@@ -624,7 +797,7 @@ function ConfirmPanel() {
                         showIcon
                         icon={<InfoCircleOutlined />}
                         message="暂无采纳内容"
-                        description="请先在左侧采纳需要写入报告的建议"
+                        description="请先在「AI报告建议」页面对建议进行处理"
                         style={{ background: 'transparent', border: '1px dashed #475569' }}
                       />
                     )}
@@ -657,7 +830,7 @@ function ConfirmPanel() {
                   )}
 
                   {pendingCount > 0 && (
-                    <div style={{ marginBottom: 16 }}>
+                    <div>
                       <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                         <QuestionOutlined style={{ color: '#f59e0b' }} />
                         待决定内容（默认不写入报告）
@@ -668,45 +841,51 @@ function ConfirmPanel() {
                         showIcon
                         icon={<WarningOutlined />}
                         message={`还有 ${pendingCount} 条建议尚未决定`}
-                        description="请返回「AI报告建议」页面对这些建议进行处理，未决定的内容不会写入正式报告"
+                        description="请返回「AI报告建议」页面对这些建议进行处理"
                         style={{ background: 'transparent', border: '1px dashed #f59e0b' }}
                       />
                     </div>
                   )}
-
-                  {modificationCount > 0 && (
-                    <div>
-                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <EditOutlined style={{ color: '#8b5cf6' }} />
-                        人工修改记录
-                        <Tag color="purple" style={{ marginLeft: 'auto' }}>{modificationCount}处修改</Tag>
-                      </div>
-                      <List
-                        size="small"
-                        dataSource={currentTask.modifications}
-                        renderItem={(item) => (
-                          <List.Item style={{ background: '#1e293b', marginBottom: 8, borderRadius: 4, padding: '12px 16px' }}>
-                            <List.Item.Meta
-                              avatar={<Avatar size="small" style={{ background: '#8b5cf6', fontSize: 12 }}>修</Avatar>}
-                              title={
-                                <span style={{ fontSize: 12, color: '#f1f5f9' }}>
-                                  修改了「{suggestionTypeLabels[item.suggestionType].label}」内容
-                                </span>
-                              }
-                              description={
-                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                                  <div style={{ textDecoration: 'line-through', marginBottom: 4 }}>原文：{item.originalValue}</div>
-                                  <div style={{ color: '#10b981' }}>修改：{item.modifiedValue}</div>
-                                  <div style={{ marginTop: 4, fontSize: 10 }}>{item.modifiedAt} · {item.operator}</div>
-                                </div>
-                              }
-                            />
-                          </List.Item>
-                        )}
-                      />
-                    </div>
-                  )}
                 </Card>
+
+                {modificationCount > 0 && (
+                  <Card
+                    size="small"
+                    className="panel-card"
+                    style={{ border: 'none' }}
+                    title={
+                      <span style={{ fontSize: 13, fontWeight: 500 }}>
+                        <EditOutlined style={{ color: '#8b5cf6', marginRight: 6 }} />
+                        人工修改记录
+                        <Tag color="purple" style={{ fontSize: 10, marginLeft: 8 }}>{modificationCount}处修改</Tag>
+                      </span>
+                    }
+                  >
+                    <List
+                      size="small"
+                      dataSource={currentTask.modifications}
+                      renderItem={(item) => (
+                        <List.Item style={{ background: '#1e293b', marginBottom: 8, borderRadius: 4, padding: '12px 16px' }}>
+                          <List.Item.Meta
+                            avatar={<Avatar size="small" style={{ background: '#8b5cf6', fontSize: 12 }}>修</Avatar>}
+                            title={
+                              <span style={{ fontSize: 12, color: '#f1f5f9' }}>
+                                修改了「{suggestionTypeLabels[item.suggestionType].label}」内容
+                              </span>
+                            }
+                            description={
+                              <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                                <div style={{ textDecoration: 'line-through', marginBottom: 4 }}>原文：{item.originalValue}</div>
+                                <div style={{ color: '#10b981' }}>修改：{item.modifiedValue}</div>
+                                <div style={{ marginTop: 4, fontSize: 10 }}>{item.modifiedAt} · {item.operator}</div>
+                              </div>
+                            }
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  </Card>
+                )}
               </div>
             ) : (
               <Card className="panel-card" style={{ border: 'none' }} size="small" title="审核修改记录">
@@ -857,26 +1036,67 @@ function ConfirmPanel() {
               </Row>
             </div>
 
+            {currentTask.pacsWriteStatus === 'writing' && (
+              <Alert
+                type="info"
+                showIcon
+                icon={<Progress type="circle" percent={100} size={20} status="active" />}
+                message="写入中..."
+                style={{ background: 'rgba(14,165,233,0.1)', border: 'none' }}
+              />
+            )}
+            {currentTask.pacsWriteStatus === 'success' && (
+              <Alert
+                type="success"
+                showIcon
+                icon={<CheckCircleOutlined />}
+                message="已成功写入 PACS"
+                style={{ background: 'rgba(16,185,129,0.1)', border: 'none' }}
+              />
+            )}
+            {currentTask.pacsWriteStatus === 'failed' && (
+              <Alert
+                type="error"
+                showIcon
+                icon={<CloseCircleOutlined />}
+                message="写入失败，可重试"
+                style={{ background: 'rgba(239,68,68,0.1)', border: 'none' }}
+              />
+            )}
+
             <Button
               type="primary"
               danger
               size="large"
               icon={<CloseCircleOutlined />}
               onClick={handleReject}
-              disabled={currentTask.status !== 'pending'}
+              disabled={currentTask.status !== 'pending' || currentTask.pacsWriteStatus === 'writing'}
             >
               驳回此报告
             </Button>
-            <Button
-              type="primary"
-              size="large"
-              icon={<SendOutlined />}
-              onClick={handleApprove}
-              disabled={currentTask.status !== 'pending'}
-              style={{ background: '#10b981', borderColor: '#10b981' }}
-            >
-              通过并写入 PACS
-            </Button>
+            {currentTask.pacsWriteStatus === 'failed' ? (
+              <Button
+                type="primary"
+                size="large"
+                icon={<SendOutlined />}
+                onClick={handleRetryWrite}
+                style={{ background: '#f59e0b', borderColor: '#f59e0b' }}
+              >
+                重试写入 PACS
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                size="large"
+                icon={<SendOutlined />}
+                onClick={handleApprove}
+                loading={currentTask.pacsWriteStatus === 'writing'}
+                disabled={currentTask.status !== 'pending' || currentTask.pacsWriteStatus === 'success'}
+                style={{ background: '#10b981', borderColor: '#10b981' }}
+              >
+                {currentTask.pacsWriteStatus === 'success' ? '已成功写入' : '通过并写入 PACS'}
+              </Button>
+            )}
           </div>
         </div>
       </div>

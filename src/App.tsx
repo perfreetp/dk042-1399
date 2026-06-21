@@ -8,7 +8,8 @@ import {
   UserOutlined,
   SettingOutlined,
   BellOutlined,
-  ClockCircleOutlined
+  ClockCircleOutlined,
+  HistoryOutlined
 } from '@ant-design/icons'
 import { useReviewStore } from './store/reviewStore'
 import TaskListPanel from './components/TaskListPanel'
@@ -16,6 +17,7 @@ import ImageComparePanel from './components/ImageComparePanel'
 import ConfirmPanel from './components/ConfirmPanel'
 import BatchPanel from './components/BatchPanel'
 import PreferencePanel from './components/PreferencePanel'
+import HistoryPanel from './components/HistoryPanel'
 import type { PanelKey } from './types'
 import dayjs from 'dayjs'
 
@@ -26,6 +28,7 @@ const menuItems: { key: PanelKey; icon: React.ReactNode; label: string }[] = [
   { key: 'compare', icon: <PictureOutlined />, label: '影像对照' },
   { key: 'confirm', icon: <FileTextOutlined />, label: '差异确认' },
   { key: 'batch', icon: <ClusterOutlined />, label: '批量处理' },
+  { key: 'history', icon: <HistoryOutlined />, label: '审核记录' },
   { key: 'preference', icon: <UserOutlined />, label: '个人偏好' }
 ]
 
@@ -67,6 +70,8 @@ function App() {
         return <ConfirmPanel />
       case 'batch':
         return <BatchPanel />
+      case 'history':
+        return <HistoryPanel />
       case 'preference':
         return <PreferencePanel />
       default:

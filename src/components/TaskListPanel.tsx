@@ -69,8 +69,10 @@ function TaskListPanel() {
   const [onlyWorkbasket, setOnlyWorkbasket] = useState(false)
 
   const displayTasks = onlyWorkbasket
-    ? filteredTasks.filter((t) => workbasketTaskIds.has(t.id))
+    ? filteredTasks.filter((t) => workbasketTaskIds.has(t.id) && t.status === 'pending')
     : filteredTasks
+
+  const visiblePendingIds = displayTasks.filter((t) => t.status === 'pending').map((t) => t.id)
 
   const summaryByType = (Object.keys(examTypeLabels) as ExamType[]).map((type) => ({
     type,
@@ -92,12 +94,15 @@ function TaskListPanel() {
     setActivePanel('compare')
   }
 
+  const allVisiblePendingSelected =
+    visiblePendingIds.length > 0 && visiblePendingIds.every((id) => selectedTaskIds.has(id))
+
   const columns = [
     {
       title: (
         <Checkbox
-          checked={selectedTaskIds.size === displayTasks.filter((t) => t.status === 'pending').length && displayTasks.filter((t) => t.status === 'pending').length > 0}
-          onChange={(e) => e.target.checked ? selectAllTasks() : clearSelection()}
+          checked={allVisiblePendingSelected}
+          onChange={(e) => e.target.checked ? selectAllTasks(visiblePendingIds) : clearSelection()}
         />
       ),
       dataIndex: 'select',
@@ -446,9 +451,12 @@ function TaskListPanel() {
                 size="small"
                 icon={<FolderOpenOutlined />}
                 onClick={() => {
-                  batchAddToWorkbasket(Array.from(selectedTaskIds))
+                  const idsToAdd = Array.from(selectedTaskIds).filter((id) =>
+                    visiblePendingIds.includes(id)
+                  )
+                  batchAddToWorkbasket(idsToAdd)
                   clearSelection()
-                  message.success(`已将 ${selectedTaskIds.size} 份报告加入工作篮`)
+                  message.success(`已将 ${idsToAdd.length} 份报告加入工作篮`)
                 }}
                 style={{ background: '#8b5cf6', borderColor: '#8b5cf6' }}
                 type="primary"

@@ -1,5 +1,14 @@
 import { create } from 'zustand'
-import type { ReviewTask, PanelKey, UserPreferences, ReviewStats, AISuggestion, ModificationTrace } from '../types'
+import type {
+  ReviewTask,
+  PanelKey,
+  UserPreferences,
+  ReviewStats,
+  AISuggestion,
+  ModificationTrace,
+  PacsWriteStatus,
+  FinalReport
+} from '../types'
 import { mockTasks, mockPreferences, mockStats, mockRejectTemplates } from '../data/mock'
 import dayjs from 'dayjs'
 
@@ -9,6 +18,7 @@ interface ReviewStore {
   activePanel: PanelKey
   selectedTaskIds: Set<string>
   workbasketTaskIds: Set<string>
+  workbasketOrder: string[]
   preferences: UserPreferences
   stats: ReviewStats
   rejectTemplates: typeof mockRejectTemplates
@@ -16,22 +26,31 @@ interface ReviewStore {
   filterUrgency: string
   filterStatus: string
   searchText: string
+  historyFilter: { patientName?: string; accessionNumber?: string; status?: string }
 
   setActivePanel: (panel: PanelKey) => void
   setCurrentTask: (id: string) => void
   toggleTaskSelection: (id: string) => void
-  selectAllTasks: () => void
+  selectAllTasks: (visibleTaskIds?: string[]) => void
   clearSelection: () => void
   setFilterType: (type: string) => void
   setFilterUrgency: (urgency: string) => void
   setFilterStatus: (status: string) => void
   setSearchText: (text: string) => void
+  setHistoryFilter: (filter: Partial<ReviewStore['historyFilter']>) => void
 
   acceptSuggestion: (taskId: string, suggestionId: string) => void
   rejectSuggestion: (taskId: string, suggestionId: string) => void
   modifySuggestion: (taskId: string, suggestionId: string, content: string) => void
-  approveTask: (taskId: string) => void
+
+  updateFinalReport: (taskId: string, report: Partial<FinalReport>) => void
+  regenerateFinalReport: (taskId: string) => void
+
+  approveTask: (taskId: string) => Promise<void>
   rejectTask: (taskId: string, reason: string) => void
+  retryPacsWrite: (taskId: string) => Promise<void>
+  setPacsWriteStatus: (taskId: string, status: PacsWriteStatus, error?: string) => void
+
   batchApprove: (taskIds: string[]) => void
   batchReject: (taskIds: string[], reason: string) => void
 
@@ -44,12 +63,41 @@ interface ReviewStore {
   updatePreferences: (prefs: Partial<UserPreferences>) => void
 }
 
+function generateFinalReport(task: ReviewTask): FinalReport {
+  const findings = task.suggestions
+    .filter((s) => s.accepted === true && s.type === 'finding')
+    .map((s) => s.modifiedContent || s.content)
+    .join('\n')
+
+  const impression = task.suggestions
+    .filter((s) => s.accepted === true && s.type === 'impression')
+    .map((s) => s.modifiedContent || s.content)
+    .join('\n')
+
+  return {
+    findings: findings || '（无影像所见）',
+    impression: impression || '（无诊断意见）',
+    lastModifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+  }
+}
+
 export const useReviewStore = create<ReviewStore>((set, get) => ({
-  tasks: mockTasks,
+  tasks: mockTasks.map((t) => {
+    const fullTask = {
+      ...t,
+      pacsWriteStatus: 'idle' as PacsWriteStatus,
+      finalReport: { findings: '', impression: '', lastModifiedAt: '' }
+    } as ReviewTask
+    return {
+      ...fullTask,
+      finalReport: generateFinalReport(fullTask)
+    }
+  }),
   currentTaskId: mockTasks[0]?.id || null,
   activePanel: 'list',
   selectedTaskIds: new Set(),
   workbasketTaskIds: new Set(),
+  workbasketOrder: [],
   preferences: mockPreferences,
   stats: mockStats,
   rejectTemplates: mockRejectTemplates,
@@ -57,6 +105,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   filterUrgency: 'all',
   filterStatus: 'all',
   searchText: '',
+  historyFilter: {},
 
   setActivePanel: (panel) => set({ activePanel: panel }),
 
@@ -73,10 +122,20 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
       return { selectedTaskIds: newSet }
     }),
 
-  selectAllTasks: () => {
-    const filtered = getFiltered(get())
-    set({ selectedTaskIds: new Set(filtered.map((t: ReviewTask) => t.id)) })
-  },
+  selectAllTasks: (visibleTaskIds) =>
+    set((state) => {
+      if (visibleTaskIds) {
+        const pendingVisible = visibleTaskIds.filter((id) => {
+          const task = state.tasks.find((t) => t.id === id)
+          return task && task.status === 'pending'
+        })
+        return { selectedTaskIds: new Set(pendingVisible) }
+      }
+      const filtered = getFiltered(state)
+      return {
+        selectedTaskIds: new Set(filtered.filter((t: ReviewTask) => t.status === 'pending').map((t: ReviewTask) => t.id))
+      }
+    }),
 
   clearSelection: () => set({ selectedTaskIds: new Set() }),
 
@@ -84,123 +143,256 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   setFilterUrgency: (urgency) => set({ filterUrgency: urgency }),
   setFilterStatus: (status) => set({ filterStatus: status }),
   setSearchText: (text) => set({ searchText: text }),
+  setHistoryFilter: (filter) => set((state) => ({ historyFilter: { ...state.historyFilter, ...filter } })),
 
   acceptSuggestion: (taskId: string, suggestionId: string) =>
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
+    set((state) => {
+      const newTasks = state.tasks.map((t) =>
         t.id === taskId
           ? {
               ...t,
               suggestions: t.suggestions.map((s) =>
-                s.id === suggestionId
-                  ? { ...s, accepted: s.accepted === true ? null : true }
-                  : s
+                s.id === suggestionId ? { ...s, accepted: s.accepted === true ? null : true } : s
               )
             }
           : t
       )
-    })),
+      const updatedTask = newTasks.find((t) => t.id === taskId)
+      return {
+        tasks: newTasks,
+        ...(updatedTask && { finalReport: generateFinalReport(updatedTask) })
+      }
+    }),
 
   rejectSuggestion: (taskId: string, suggestionId: string) =>
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
+    set((state) => {
+      const newTasks = state.tasks.map((t) =>
         t.id === taskId
           ? {
               ...t,
               suggestions: t.suggestions.map((s) =>
-                s.id === suggestionId
-                  ? { ...s, accepted: s.accepted === false ? null : false }
-                  : s
+                s.id === suggestionId ? { ...s, accepted: s.accepted === false ? null : false } : s
               )
             }
           : t
       )
-    })),
+      const updatedTask = newTasks.find((t) => t.id === taskId)
+      return {
+        tasks: newTasks,
+        ...(updatedTask && { finalReport: generateFinalReport(updatedTask) })
+      }
+    }),
 
   modifySuggestion: (taskId, suggestionId, content) =>
     set((state) => {
       const suggestion = state.tasks.find((t) => t.id === taskId)?.suggestions.find((s) => s.id === suggestionId)
+      const newTasks = state.tasks.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              suggestions: t.suggestions.map((s) =>
+                s.id === suggestionId
+                  ? {
+                      ...s,
+                      modifiedContent: content,
+                      isModified: content !== s.content,
+                      accepted: content !== s.content ? true : s.accepted
+                    }
+                  : s
+              ),
+              modifications: [
+                ...t.modifications,
+                {
+                  id: `M${Date.now()}`,
+                  fieldName: '报告建议',
+                  originalValue: suggestion?.content || '',
+                  modifiedValue: content,
+                  modifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+                  operator: '当前医生',
+                  suggestionType: suggestion?.type || 'finding'
+                } as ModificationTrace
+              ]
+            }
+          : t
+      )
+      const updatedTask = newTasks.find((t) => t.id === taskId)
+      return {
+        tasks: newTasks,
+        ...(updatedTask && { finalReport: generateFinalReport(updatedTask) })
+      }
+    }),
+
+  updateFinalReport: (taskId, report) =>
+    set((state) => ({
+      tasks: state.tasks.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              finalReport: {
+                ...t.finalReport,
+                ...report,
+                lastModifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+              }
+            }
+          : t
+      )
+    })),
+
+  regenerateFinalReport: (taskId) =>
+    set((state) => {
+      const task = state.tasks.find((t) => t.id === taskId)
+      if (!task) return {}
       return {
         tasks: state.tasks.map((t) =>
-          t.id === taskId
-            ? {
-                ...t,
-                suggestions: t.suggestions.map((s) =>
-                  s.id === suggestionId
-                    ? {
-                        ...s,
-                        modifiedContent: content,
-                        isModified: content !== s.content,
-                        accepted: content !== s.content ? true : s.accepted
-                      }
-                    : s
-                ),
-                modifications: [
-                  ...t.modifications,
-                  {
-                    id: `M${Date.now()}`,
-                    fieldName: '报告建议',
-                    originalValue: suggestion?.content || '',
-                    modifiedValue: content,
-                    modifiedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-                    operator: '当前医生',
-                    suggestionType: suggestion?.type || 'finding'
-                  } as ModificationTrace
-                ]
-              }
-            : t
+          t.id === taskId ? { ...t, finalReport: generateFinalReport(t) } : t
         )
       }
     }),
 
-  approveTask: (taskId) => {
-    const state = get()
-    const inWorkbasket = state.workbasketTaskIds.has(taskId)
+  setPacsWriteStatus: (taskId, status, error) =>
     set((state) => ({
       tasks: state.tasks.map((t) =>
+        t.id === taskId
+          ? { ...t, pacsWriteStatus: status, pacsWriteError: error }
+          : t
+      )
+    })),
+
+  approveTask: async (taskId) => {
+    const state = get()
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task) return
+
+    const inWorkbasket = state.workbasketTaskIds.has(taskId)
+
+    set((s) => ({
+      tasks: s.tasks.map((t) =>
+        t.id === taskId ? { ...t, pacsWriteStatus: 'writing' as PacsWriteStatus } : t
+      )
+    }))
+
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+
+    const shouldFail = Math.random() < 0.08
+
+    if (shouldFail) {
+      set((s) => ({
+        tasks: s.tasks.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                pacsWriteStatus: 'failed' as PacsWriteStatus,
+                pacsWriteError: 'PACS 连接超时，请重试'
+              }
+            : t
+        )
+      }))
+      return
+    }
+
+    set((s) => ({
+      tasks: s.tasks.map((t) =>
         t.id === taskId
           ? {
               ...t,
               status: 'approved',
               reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              pacsWriteStatus: 'success' as PacsWriteStatus
             }
           : t
       ),
       stats: {
-        ...state.stats,
-        todayReviewed: state.stats.todayReviewed + 1,
-        todayApproved: state.stats.todayApproved + 1
+        ...s.stats,
+        todayReviewed: s.stats.todayReviewed + 1,
+        todayApproved: s.stats.todayApproved + 1
       }
     }))
+
     if (inWorkbasket && get().preferences.autoAdvance) {
-      setTimeout(() => get().advanceWorkbasket(), 100)
+      setTimeout(() => get().advanceWorkbasket(), 300)
+    }
+  },
+
+  retryPacsWrite: async (taskId) => {
+    const state = get()
+    const inWorkbasket = state.workbasketTaskIds.has(taskId)
+
+    set((s) => ({
+      tasks: s.tasks.map((t) =>
+        t.id === taskId ? { ...t, pacsWriteStatus: 'writing' as PacsWriteStatus, pacsWriteError: undefined } : t
+      )
+    }))
+
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+
+    const shouldFail = Math.random() < 0.15
+
+    if (shouldFail) {
+      set((s) => ({
+        tasks: s.tasks.map((t) =>
+          t.id === taskId
+            ? {
+                ...t,
+                pacsWriteStatus: 'failed' as PacsWriteStatus,
+                pacsWriteError: 'PACS 服务暂不可用，请稍后重试'
+              }
+            : t
+        )
+      }))
+      return
+    }
+
+    set((s) => ({
+      tasks: s.tasks.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              status: 'approved',
+              reviewerId: 'U001',
+              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              pacsWriteStatus: 'success' as PacsWriteStatus
+            }
+          : t
+      ),
+      stats: {
+        ...s.stats,
+        todayReviewed: s.stats.todayReviewed + 1,
+        todayApproved: s.stats.todayApproved + 1
+      }
+    }))
+
+    if (inWorkbasket && get().preferences.autoAdvance) {
+      setTimeout(() => get().advanceWorkbasket(), 300)
     }
   },
 
   rejectTask: (taskId, reason) => {
     const state = get()
     const inWorkbasket = state.workbasketTaskIds.has(taskId)
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
+
+    set((s) => ({
+      tasks: s.tasks.map((t) =>
         t.id === taskId
           ? {
               ...t,
               status: 'rejected',
               rejectReason: reason,
               reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              pacsWriteStatus: 'idle' as PacsWriteStatus
             }
           : t
       ),
       stats: {
-        ...state.stats,
-        todayReviewed: state.stats.todayReviewed + 1,
-        todayRejected: state.stats.todayRejected + 1
+        ...s.stats,
+        todayReviewed: s.stats.todayReviewed + 1,
+        todayRejected: s.stats.todayRejected + 1
       }
     }))
+
     if (inWorkbasket && get().preferences.autoAdvance) {
-      setTimeout(() => get().advanceWorkbasket(), 100)
+      setTimeout(() => get().advanceWorkbasket(), 300)
     }
   },
 
@@ -212,7 +404,8 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
               ...t,
               status: 'approved',
               reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              pacsWriteStatus: 'success' as PacsWriteStatus
             }
           : t
       ),
@@ -233,7 +426,8 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
               status: 'rejected',
               rejectReason: reason,
               reviewerId: 'U001',
-              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
+              reviewedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+              pacsWriteStatus: 'idle' as PacsWriteStatus
             }
           : t
       ),
@@ -247,47 +441,72 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
 
   addToWorkbasket: (taskId) =>
     set((state) => {
+      if (state.workbasketTaskIds.has(taskId)) return {}
+      const task = state.tasks.find((t) => t.id === taskId)
+      if (!task || task.status !== 'pending') return {}
       const newSet = new Set(state.workbasketTaskIds)
       newSet.add(taskId)
-      return { workbasketTaskIds: newSet }
+      return {
+        workbasketTaskIds: newSet,
+        workbasketOrder: [...state.workbasketOrder, taskId]
+      }
     }),
 
   removeFromWorkbasket: (taskId) =>
     set((state) => {
       const newSet = new Set(state.workbasketTaskIds)
       newSet.delete(taskId)
-      return { workbasketTaskIds: newSet }
+      return {
+        workbasketTaskIds: newSet,
+        workbasketOrder: state.workbasketOrder.filter((id) => id !== taskId)
+      }
     }),
 
-  clearWorkbasket: () => set({ workbasketTaskIds: new Set() }),
+  clearWorkbasket: () => set({ workbasketTaskIds: new Set(), workbasketOrder: [] }),
 
   batchAddToWorkbasket: (taskIds) =>
     set((state) => {
       const newSet = new Set(state.workbasketTaskIds)
-      taskIds.forEach((id) => newSet.add(id))
-      return { workbasketTaskIds: newSet }
+      const newOrder = [...state.workbasketOrder]
+      taskIds.forEach((id) => {
+        const task = state.tasks.find((t) => t.id === id)
+        if (task && task.status === 'pending' && !newSet.has(id)) {
+          newSet.add(id)
+          newOrder.push(id)
+        }
+      })
+      return {
+        workbasketTaskIds: newSet,
+        workbasketOrder: newOrder
+      }
     }),
 
   advanceWorkbasket: () => {
     const state = get()
-    const workbasketArray = Array.from(state.workbasketTaskIds)
-    const currentIndex = workbasketArray.indexOf(state.currentTaskId || '')
-    if (currentIndex >= 0 && currentIndex < workbasketArray.length - 1) {
-      const nextTaskId = workbasketArray[currentIndex + 1]
-      const newSet = new Set(state.workbasketTaskIds)
-      newSet.delete(state.currentTaskId || '')
-      set({
-        workbasketTaskIds: newSet,
-        currentTaskId: nextTaskId
-      })
-    } else if (currentIndex >= 0) {
-      const newSet = new Set(state.workbasketTaskIds)
-      newSet.delete(state.currentTaskId || '')
-      set({ workbasketTaskIds: newSet })
+    const currentId = state.currentTaskId
+    if (!currentId) return
+
+    const currentIndex = state.workbasketOrder.indexOf(currentId)
+
+    const newOrder = state.workbasketOrder.filter((id) => id !== currentId)
+    const newSet = new Set(state.workbasketTaskIds)
+    newSet.delete(currentId)
+
+    let nextTaskId: string | null = null
+    if (currentIndex >= 0 && currentIndex < newOrder.length) {
+      nextTaskId = newOrder[currentIndex]
+    } else if (newOrder.length > 0) {
+      nextTaskId = newOrder[0]
     }
+
+    set({
+      workbasketOrder: newOrder,
+      workbasketTaskIds: newSet,
+      currentTaskId: nextTaskId
+    })
   },
 
-  updatePreferences: (prefs) =>
+  updatePreferences: (prefs: Partial<UserPreferences>) =>
     set((state) => ({
       preferences: { ...state.preferences, ...prefs }
     }))
@@ -318,6 +537,30 @@ export function useFilteredTasks() {
 
 export function useCurrentTask() {
   return useReviewStore((state) => state.tasks.find((t) => t.id === state.currentTaskId) || null)
+}
+
+export function useWorkbasketTasks() {
+  return useReviewStore((state) =>
+    state.workbasketOrder
+      .map((id) => state.tasks.find((t) => t.id === id))
+      .filter((t): t is ReviewTask => !!t && t.status === 'pending')
+  )
+}
+
+export function useHistoryTasks() {
+  return useReviewStore((state) => {
+    let result = state.tasks.filter((t) => t.status !== 'pending')
+    if (state.historyFilter.patientName) {
+      result = result.filter((t) => t.patientName.includes(state.historyFilter.patientName!))
+    }
+    if (state.historyFilter.accessionNumber) {
+      result = result.filter((t) => t.accessionNumber.includes(state.historyFilter.accessionNumber!))
+    }
+    if (state.historyFilter.status && state.historyFilter.status !== 'all') {
+      result = result.filter((t) => t.status === state.historyFilter.status)
+    }
+    return result
+  })
 }
 
 export { getFiltered }

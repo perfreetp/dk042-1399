@@ -2,6 +2,14 @@ export type ExamType = 'CT' | 'MRI' | 'DR' | 'US' | 'PET-CT' | 'DSA'
 
 export type ReviewStatus = 'pending' | 'reviewing' | 'approved' | 'rejected' | 'timeout'
 
+export type PacsWriteStatus = 'idle' | 'writing' | 'success' | 'failed'
+
+export interface FinalReport {
+  findings: string
+  impression: string
+  lastModifiedAt: string
+}
+
 export type UrgencyLevel = 'routine' | 'urgent' | 'emergency'
 
 export interface LesionMeasurement {
@@ -73,6 +81,9 @@ export interface ReviewTask {
   rejectReason?: string
   originalImageUrl: string
   aiAnnotatedImageUrl: string
+  pacsWriteStatus: PacsWriteStatus
+  pacsWriteError?: string
+  finalReport: FinalReport
 }
 
 export interface ReviewStats {
@@ -94,4 +105,4 @@ export interface UserPreferences {
   reviewReminderMinutes: number
 }
 
-export type PanelKey = 'list' | 'compare' | 'confirm' | 'batch' | 'preference'
+export type PanelKey = 'list' | 'compare' | 'confirm' | 'batch' | 'preference' | 'history'
